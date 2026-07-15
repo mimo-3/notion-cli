@@ -313,7 +313,7 @@ async fn main() -> Result<()> {
 1. Prompt user for token (or accept `--token` flag)
 2. Validate token by calling `GET /v1/users/me`
 3. Store token in the credentials file (`credentials.json`, `0600`, directory `0700`)
-5. Save workspace metadata to config
+4. Save workspace metadata to config
 
 ### `notion auth logout`
 
