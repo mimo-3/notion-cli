@@ -193,3 +193,190 @@ impl NotionClient {
         Ok(all_results)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use url::Url;
+    use wiremock::{matchers::any, Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    fn client_for(server: &MockServer) -> NotionClient {
+        let base_url = Url::parse(&format!("{}/", server.uri())).unwrap();
+        NotionClient::new("secret_test".to_string())
+            .unwrap()
+            .with_base_url(base_url)
+    }
+
+    #[tokio::test]
+    async fn paginate_post_errors_on_missing_cursor() {
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"id": "1"}],
+                "has_more": true,
+                "next_cursor": null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let opts = PaginationOpts {
+            fetch_all: true,
+            ..Default::default()
+        };
+        let result = client.paginate_post("/v1/test", &json!({}), &opts).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no next_cursor"),
+            "expected missing cursor error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn paginate_post_errors_on_same_cursor_twice() {
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"id": "1"}],
+                "has_more": true,
+                "next_cursor": "same_cursor"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let opts = PaginationOpts {
+            fetch_all: true,
+            ..Default::default()
+        };
+        let result = client.paginate_post("/v1/test", &json!({}), &opts).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("same cursor twice"),
+            "expected same cursor error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn paginate_post_collects_all_pages() {
+        let server = MockServer::start().await;
+
+        // Page 1: has_more=true with cursor
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"id": "1"}, {"id": "2"}],
+                "has_more": true,
+                "next_cursor": "cursor_page2"
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        // Page 2: has_more=false
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"id": "3"}],
+                "has_more": false,
+                "next_cursor": null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let opts = PaginationOpts {
+            fetch_all: true,
+            ..Default::default()
+        };
+        let result = client
+            .paginate_post("/v1/test", &json!({}), &opts)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0]["id"], "1");
+        assert_eq!(result[2]["id"], "3");
+    }
+
+    #[tokio::test]
+    async fn paginate_post_respects_limit() {
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"id": "1"}, {"id": "2"}, {"id": "3"}],
+                "has_more": false
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let opts = PaginationOpts {
+            limit: Some(2),
+            ..Default::default()
+        };
+        let result = client
+            .paginate_post("/v1/test", &json!({}), &opts)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn paginate_get_errors_on_missing_cursor() {
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"id": "1"}],
+                "has_more": true,
+                "next_cursor": null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let opts = PaginationOpts {
+            fetch_all: true,
+            ..Default::default()
+        };
+        let result = client.paginate_get("/v1/test", &opts).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no next_cursor"),
+            "expected missing cursor error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn paginate_get_collects_all_pages() {
+        let server = MockServer::start().await;
+
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"id": "a"}],
+                "has_more": true,
+                "next_cursor": "c2"
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"id": "b"}],
+                "has_more": false
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let opts = PaginationOpts {
+            fetch_all: true,
+            ..Default::default()
+        };
+        let result = client.paginate_get("/v1/test", &opts).await.unwrap();
+        assert_eq!(result.len(), 2);
+    }
+}
