@@ -102,10 +102,9 @@ impl Config {
         {
             use std::os::unix::fs::OpenOptionsExt;
 
-            let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+            let temp_path = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
             let mut file = fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
+                .create_new(true)
                 .write(true)
                 .mode(0o600)
                 .open(&temp_path)?;
