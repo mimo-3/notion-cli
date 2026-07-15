@@ -97,7 +97,8 @@ impl NotionClient {
         let limit = opts.limit.unwrap_or(u32::MAX);
 
         loop {
-            let mut path = format!("{base_path}?page_size={}", opts.page_size);
+            let sep = if base_path.contains('?') { '&' } else { '?' };
+            let mut path = format!("{base_path}{sep}page_size={}", opts.page_size);
             if let Some(ref c) = cursor {
                 path.push_str(&format!("&start_cursor={c}"));
             }
