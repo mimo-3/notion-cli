@@ -50,7 +50,7 @@
 | POST | `/v1/oauth/token/revoke` | Revoke an OAuth token |
 | GET | `/v1/oauth/token/introspect` | Introspect a token |
 
-### Pages (7 endpoints)
+### Pages (8 endpoints)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -60,8 +60,8 @@
 | DELETE | `/v1/pages/{page_id}` | Trash a page |
 | POST | `/v1/pages/{page_id}/move` | Move a page to new parent |
 | GET | `/v1/pages/{page_id}/properties/{property_id}` | Retrieve a page property item (paginated) |
-| GET | `/v1/pages/{page_id}/content` | Retrieve page content as markdown |
-| PUT | `/v1/pages/{page_id}/content` | Update page content as markdown |
+| GET | `/v1/pages/{page_id}/markdown` | Retrieve page content as markdown |
+| PATCH | `/v1/pages/{page_id}/markdown` | Update page content as markdown |
 
 ### Databases (3 endpoints)
 
@@ -113,7 +113,7 @@
 | GET | `/v1/data_sources/{data_source_id}` | Retrieve a data source |
 | PATCH | `/v1/data_sources/{data_source_id}` | Update a data source |
 | POST | `/v1/data_sources/{data_source_id}/query` | Query a data source |
-| GET | `/v1/data_source_templates` | List data source templates |
+| GET | `/v1/data_sources/{data_source_id}/templates` | List templates for a data source |
 
 ### Views (7 endpoints)
 
