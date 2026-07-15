@@ -23,6 +23,9 @@ pub enum CliError {
     #[allow(dead_code)]
     InvalidId(String),
 
+    #[error("Pagination error: {0}")]
+    Pagination(String),
+
     #[error("Config error: {0}")]
     Config(String),
 
