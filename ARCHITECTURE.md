@@ -11,7 +11,6 @@
 | serde / serde_json | 1.x | JSON serialization |
 | serde_yaml | 0.9+ | YAML output |
 | csv | 1.x | CSV/TSV output |
-| keyring | 3.x | OS keychain token storage |
 | dirs | 5.x | XDG-compliant config paths |
 | colored | 2.x | Terminal color output |
 | thiserror | 2.x | Error type derivation |
@@ -159,7 +158,7 @@ pub struct Defaults {
 Token resolution order:
 1. `--token` flag
 2. `NOTION_API_TOKEN` env var
-3. OS keyring (service: `notion-cli`, account: profile name)
+3. Credentials file (`credentials.json`, 0600, alongside the config file)
 4. Config file `profiles.<name>.token`
 
 Config path: `$XDG_CONFIG_HOME/notion-cli/config.json` (typically `~/.config/notion-cli/config.json`)
@@ -313,13 +312,12 @@ async fn main() -> Result<()> {
 
 1. Prompt user for token (or accept `--token` flag)
 2. Validate token by calling `GET /v1/users/me`
-3. Store token in OS keyring via `keyring` crate (service: `notion-cli`, account: `<profile>`)
-4. If keyring unavailable (headless server, WSL), fall back to config file with `0600` permissions
+3. Store token in the credentials file (`credentials.json`, `0600`, directory `0700`)
 5. Save workspace metadata to config
 
 ### `notion auth logout`
 
-1. Delete token from keyring
+1. Delete token from the credentials file
 2. Remove profile from config file
 
 ### `notion auth switch <profile>`
@@ -329,7 +327,7 @@ async fn main() -> Result<()> {
 
 ### Environment variable override
 
-`NOTION_API_TOKEN` always takes precedence. When set, no keyring/config lookup occurs.
+`NOTION_API_TOKEN` always takes precedence. When set, no credentials/config lookup occurs.
 
 ## 6. Rate Limiting Strategy
 
@@ -466,7 +464,7 @@ Phase 1 delivers the highest-value commands that cover the most common CLI workf
 
 1. **Skeleton**: Cargo project, clap command tree, config loading, NotionClient with auth
 2. **Core client**: Rate limiting, retry, pagination, error handling
-3. **Auth + User**: `auth login/logout/whoami`, `user me`, keyring storage
+3. **Auth + User**: `auth login/logout/whoami`, `user me`, credentials file storage
 4. **Search**: `search` command with all output formats
 5. **Pages**: `page get/content/create` with markdown I/O
 6. **Data source query**: `db get/query` with filter JSON, sort, output formats
