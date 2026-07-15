@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use std::io::Write;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::CliError;
@@ -95,14 +98,24 @@ impl Config {
             fs::create_dir_all(parent)?;
         }
         let contents = serde_json::to_string_pretty(self)?;
-        fs::write(&path, contents)?;
-
-        // Set file permissions to 0600 on Unix
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .mode(0o600)
+                .open(&temp_path)?;
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+            fs::rename(temp_path, &path)?;
         }
+
+        #[cfg(not(unix))]
+        fs::write(&path, contents)?;
 
         Ok(())
     }
@@ -174,6 +187,7 @@ impl Config {
         }
 
         // Fallback: store in config file
+        eprintln!("Warning: OS keyring unavailable; storing token in the 0600 config file");
         let profile = self
             .profiles
             .entry(profile_name.to_string())
@@ -211,6 +225,7 @@ impl Config {
         }
 
         // Fallback: store in config file
+        eprintln!("Warning: OS keyring unavailable; storing OAuth secret in the 0600 config file");
         let profile = self
             .profiles
             .entry(profile_name.to_string())
