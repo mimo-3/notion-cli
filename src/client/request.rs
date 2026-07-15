@@ -297,6 +297,72 @@ mod tests {
         assert_all_methods_reject_cross_origin_path(&path, &attacker).await;
     }
 
+    fn dry_run_client_for(server: &MockServer) -> NotionClient {
+        let base_url = Url::parse(&format!("{}/", server.uri())).unwrap();
+        let mut client = NotionClient::new(TEST_TOKEN.to_string())
+            .unwrap()
+            .with_base_url(base_url);
+        client.dry_run = true;
+        client
+    }
+
+    #[tokio::test]
+    async fn dry_run_post_returns_empty_json_without_sending() {
+        let server = MockServer::start().await;
+        mount_json_response(&server, "/v1/test").await;
+        let client = dry_run_client_for(&server);
+
+        let result = client.post("/v1/test", &json!({"x": 1})).await.unwrap();
+        assert_eq!(result, json!({}));
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "dry-run POST must not send a request"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_patch_returns_empty_json_without_sending() {
+        let server = MockServer::start().await;
+        mount_json_response(&server, "/v1/test").await;
+        let client = dry_run_client_for(&server);
+
+        let result = client.patch("/v1/test", &json!({"x": 1})).await.unwrap();
+        assert_eq!(result, json!({}));
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "dry-run PATCH must not send a request"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_delete_returns_empty_json_without_sending() {
+        let server = MockServer::start().await;
+        mount_json_response(&server, "/v1/test").await;
+        let client = dry_run_client_for(&server);
+
+        let result = client.delete("/v1/test").await.unwrap();
+        assert_eq!(result, json!({}));
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "dry-run DELETE must not send a request"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_get_still_executes() {
+        let server = MockServer::start().await;
+        mount_json_response(&server, "/v1/test").await;
+        let client = dry_run_client_for(&server);
+
+        let result = client.get("/v1/test").await.unwrap();
+        assert_eq!(result, json!({"ok": true}));
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "dry-run GET must still send the request"
+        );
+    }
+
     #[tokio::test]
     async fn all_request_methods_reject_backslash_authority_urls_before_sending() {
         let attacker = MockServer::start().await;
