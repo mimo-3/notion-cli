@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::error::CliError;
 
 const DEFAULT_BASE_URL: &str = "https://api.notion.com";
-const DEFAULT_API_VERSION: &str = "2022-06-28";
+const DEFAULT_API_VERSION: &str = "2026-03-11";
 
 pub struct NotionClient {
     pub(crate) http: reqwest::Client,

@@ -52,6 +52,7 @@ impl NotionClient {
     }
 
     /// Send a PUT request with a JSON body.
+    #[allow(dead_code)]
     pub async fn put(&self, path: &str, body: &Value) -> Result<Value, CliError> {
         let url = self.base_url.join(path).map_err(|e| {
             CliError::Config(format!("Invalid API path {path}: {e}"))

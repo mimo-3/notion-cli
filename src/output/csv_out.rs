@@ -49,7 +49,7 @@ pub fn write_csv(
             .iter()
             .map(|h| {
                 row.get(h)
-                    .map(|v| value_to_string(v))
+                    .map(value_to_string)
                     .unwrap_or_default()
             })
             .collect();

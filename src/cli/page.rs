@@ -202,7 +202,7 @@ pub async fn run(
                 body["cover"] = json!({ "type": "external", "external": { "url": cover_url } });
             }
             if archive {
-                body["archived"] = Value::Bool(true);
+                body["in_trash"] = Value::Bool(true);
             }
             let page = client.patch(&format!("/v1/pages/{id}"), &body).await?;
             output::format_value(&page, format, &mut stdout)
