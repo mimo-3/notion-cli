@@ -24,6 +24,14 @@ impl NotionClient {
         self.post("/v1/pages", &body).await
     }
 
+    pub async fn move_page(&self, page_id: &str, parent: Value) -> Result<Value, CliError> {
+        self.post(
+            &format!("/v1/pages/{page_id}/move"),
+            &json!({ "parent": parent }),
+        )
+        .await
+    }
+
     /// Get page content as markdown (Notion's native markdown endpoint).
     pub async fn get_page_markdown(&self, page_id: &str) -> Result<String, CliError> {
         let value = self.get(&format!("/v1/pages/{page_id}/markdown")).await?;
@@ -64,5 +72,70 @@ impl NotionClient {
             body["in_trash"] = Value::Bool(trash);
         }
         self.patch(&format!("/v1/pages/{page_id}"), &body).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use url::Url;
+    use wiremock::{
+        matchers::{body_json, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    use super::*;
+
+    fn client_for(server: &MockServer) -> NotionClient {
+        let base_url = Url::parse(&format!("{}/", server.uri())).unwrap();
+        NotionClient::new("secret_test".to_string())
+            .unwrap()
+            .with_base_url(base_url)
+    }
+
+    #[tokio::test]
+    async fn create_page_preserves_data_source_parent_contract() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/pages"))
+            .and(body_json(json!({
+                "parent": {"type": "data_source_id", "data_source_id": "source-123"},
+                "properties": {"title": {"title": []}},
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "page-123"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client_for(&server)
+            .create_page(
+                json!({"type": "data_source_id", "data_source_id": "source-123"}),
+                json!({"title": {"title": []}}),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn move_page_uses_typed_data_source_parent() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/pages/page-123/move"))
+            .and(body_json(json!({
+                "parent": {"type": "data_source_id", "data_source_id": "source-123"},
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "page-123"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client_for(&server)
+            .move_page(
+                "page-123",
+                json!({"type": "data_source_id", "data_source_id": "source-123"}),
+            )
+            .await
+            .unwrap();
     }
 }
