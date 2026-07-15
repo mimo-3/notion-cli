@@ -176,11 +176,6 @@ async fn login_browser(
         .map_err(|e| CliError::OAuth(format!("Failed to get local address: {e}")))?
         .port();
 
-    // Set a 5-minute timeout on the listener
-    listener
-        .set_nonblocking(false)
-        .map_err(|e| CliError::OAuth(format!("Failed to configure listener: {e}")))?;
-
     let redirect_uri = format!("http://localhost:{port}/callback");
     let auth_url = format!(
         "https://api.notion.com/v1/oauth/authorize?client_id={}&response_type=code&redirect_uri={}&owner=user&state={}",
@@ -204,27 +199,42 @@ async fn login_browser(
     // Loop to accept connections, rejecting invalid ones (max 10 attempts)
     let mut code = String::new();
     let max_attempts = 10;
+    let timeout = std::time::Duration::from_secs(300);
+    let deadline = std::time::Instant::now() + timeout;
+
     for attempt in 0..max_attempts {
-        // Set a 5-minute accept timeout via SO_RCVTIMEO
-        let timeout = std::time::Duration::from_secs(300);
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(CliError::OAuth(
+                "Timed out waiting for authorization callback".into(),
+            ));
+        }
+
+        // Use non-blocking + poll loop for accept timeout
         listener
-            .set_nonblocking(false)
+            .set_nonblocking(true)
             .map_err(|e| CliError::OAuth(format!("Failed to configure listener: {e}")))?;
 
-        let (mut stream, peer_addr) = match listener.accept() {
-            Ok(conn) => conn,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                return Err(CliError::OAuth(
-                    "Timed out waiting for authorization callback".into(),
-                ));
-            }
-            Err(e) => {
-                return Err(CliError::OAuth(format!("Failed to accept connection: {e}")));
+        let (mut stream, peer_addr) = loop {
+            match listener.accept() {
+                Ok(conn) => break conn,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(CliError::OAuth(
+                            "Timed out waiting for authorization callback".into(),
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => {
+                    return Err(CliError::OAuth(format!("Failed to accept connection: {e}")));
+                }
             }
         };
 
-        // Set read timeout on the stream
-        let _ = stream.set_read_timeout(Some(timeout));
+        stream.set_nonblocking(false).ok();
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
 
         // Only accept connections from localhost
         if !peer_addr.ip().is_loopback() {
