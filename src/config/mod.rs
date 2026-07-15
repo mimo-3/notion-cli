@@ -8,6 +8,7 @@ use crate::error::CliError;
 use crate::output::OutputFormat;
 
 const SERVICE_NAME: &str = "notion-cli";
+const SECRET_SERVICE_NAME: &str = "notion-cli-oauth-secret";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -157,8 +158,9 @@ impl Config {
         // Try keyring first
         if let Ok(entry) = keyring::Entry::new(SERVICE_NAME, profile_name) {
             if entry.set_password(token).is_ok() {
-                // Ensure profile exists in config (without token, since it's in keyring)
-                self.profiles
+                // Ensure profile exists; clear any plaintext token from config
+                let profile = self
+                    .profiles
                     .entry(profile_name.to_string())
                     .or_insert_with(|| Profile {
                         token: None,
@@ -166,6 +168,7 @@ impl Config {
                         oauth_client_id: None,
                         oauth_client_secret: None,
                     });
+                profile.token = None;
                 return Ok(());
             }
         }
@@ -195,6 +198,45 @@ impl Config {
         Ok(())
     }
 
+    /// Store an OAuth client secret in the OS keyring, falling back to config file.
+    pub fn store_secret(&mut self, profile_name: &str, secret: &str) -> Result<(), CliError> {
+        if let Ok(entry) = keyring::Entry::new(SECRET_SERVICE_NAME, profile_name) {
+            if entry.set_password(secret).is_ok() {
+                // Clear plaintext from config
+                if let Some(profile) = self.profiles.get_mut(profile_name) {
+                    profile.oauth_client_secret = None;
+                }
+                return Ok(());
+            }
+        }
+
+        // Fallback: store in config file
+        let profile = self
+            .profiles
+            .entry(profile_name.to_string())
+            .or_insert_with(|| Profile {
+                token: None,
+                workspace_id: None,
+                oauth_client_id: None,
+                oauth_client_secret: None,
+            });
+        profile.oauth_client_secret = Some(secret.to_string());
+        Ok(())
+    }
+
+    /// Resolve OAuth client secret from keyring.
+    pub fn resolve_secret(&self, profile_name: Option<&str>) -> Result<String, CliError> {
+        let profile_key = profile_name.unwrap_or(&self.default_profile);
+        if let Ok(entry) = keyring::Entry::new(SECRET_SERVICE_NAME, profile_key) {
+            if let Ok(secret) = entry.get_password() {
+                return Ok(secret);
+            }
+        }
+        Err(CliError::Config(
+            "OAuth client secret not found in keyring".into(),
+        ))
+    }
+
     /// Get a config value by dot-separated key.
     pub fn get_value(&self, key: &str) -> Option<String> {
         match key {
@@ -205,7 +247,10 @@ impl Config {
                 let profile = self.active_profile()?;
                 match k {
                     "oauth.client_id" => profile.oauth_client_id.clone(),
-                    "oauth.client_secret" => profile.oauth_client_secret.as_ref().map(|_| "***".to_string()),
+                    "oauth.client_secret" => profile
+                        .oauth_client_secret
+                        .as_ref()
+                        .map(|_| "***".to_string()),
                     _ => None,
                 }
             }
@@ -236,29 +281,17 @@ impl Config {
             }
             "oauth.client_id" => {
                 let profile_key = self.default_profile.clone();
-                let profile = self
-                    .profiles
-                    .entry(profile_key)
-                    .or_insert_with(|| Profile {
-                        token: None,
-                        workspace_id: None,
-                        oauth_client_id: None,
-                        oauth_client_secret: None,
-                    });
+                let profile = self.profiles.entry(profile_key).or_insert_with(|| Profile {
+                    token: None,
+                    workspace_id: None,
+                    oauth_client_id: None,
+                    oauth_client_secret: None,
+                });
                 profile.oauth_client_id = Some(value.to_string());
             }
             "oauth.client_secret" => {
                 let profile_key = self.default_profile.clone();
-                let profile = self
-                    .profiles
-                    .entry(profile_key)
-                    .or_insert_with(|| Profile {
-                        token: None,
-                        workspace_id: None,
-                        oauth_client_id: None,
-                        oauth_client_secret: None,
-                    });
-                profile.oauth_client_secret = Some(value.to_string());
+                self.store_secret(&profile_key, value)?;
             }
             _ => {
                 return Err(CliError::Config(format!("Unknown config key: {key}")));
