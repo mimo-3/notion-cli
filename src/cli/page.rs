@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
@@ -29,6 +29,14 @@ pub enum PageSubcommand {
         /// Fetch all blocks (auto-paginate)
         #[arg(long)]
         all: bool,
+        /// Output as Markdown (implies --all)
+        #[arg(long)]
+        markdown: bool,
+    },
+    /// Edit page content with Markdown from stdin
+    Edit {
+        /// Page ID or URL
+        id: String,
     },
     /// Create a new page
     Create {
@@ -99,15 +107,46 @@ pub async fn run(
             let page = client.get_page(&id).await?;
             output::format_value(&page, format, &mut stdout)
         }
-        PageSubcommand::Content { id, all } => {
+        PageSubcommand::Content { id, all, markdown } => {
             let id = crate::normalize_id(&id);
-            let opts = PaginationOpts {
-                page_size: 100,
-                fetch_all: all,
-                ..Default::default()
-            };
-            let blocks = client.get_block_children(&id, &opts).await?;
-            output::format_value(&Value::Array(blocks), format, &mut stdout)
+            if markdown {
+                // Try native markdown endpoint first
+                match client.get_page_markdown(&id).await {
+                    Ok(md) if !md.is_empty() => {
+                        write!(stdout, "{md}")?;
+                        Ok(())
+                    }
+                    _ => {
+                        // Fallback: fetch all blocks and convert
+                        let opts = PaginationOpts {
+                            page_size: 100,
+                            fetch_all: true,
+                            ..Default::default()
+                        };
+                        let blocks = client.get_block_children(&id, &opts).await?;
+                        output::format_value(
+                            &Value::Array(blocks),
+                            output::OutputFormat::Markdown,
+                            &mut stdout,
+                        )
+                    }
+                }
+            } else {
+                let opts = PaginationOpts {
+                    page_size: 100,
+                    fetch_all: all,
+                    ..Default::default()
+                };
+                let blocks = client.get_block_children(&id, &opts).await?;
+                output::format_value(&Value::Array(blocks), format, &mut stdout)
+            }
+        }
+        PageSubcommand::Edit { id } => {
+            let id = crate::normalize_id(&id);
+            let mut input = String::new();
+            std::io::stdin().read_to_string(&mut input)?;
+            let result = client.update_page_markdown(&id, &input).await?;
+            output::format_value(&result, format, &mut stdout)
         }
         PageSubcommand::Create {
             parent,
