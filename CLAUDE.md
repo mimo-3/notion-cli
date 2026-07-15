@@ -29,7 +29,7 @@ src/
   models/          # Serde types mirroring Notion API objects
   filter/          # Reserved for a future typed filter DSL
   output/          # Output formatters (json, yaml, csv, plain, id_only)
-  config/          # Config file + keyring + profile management
+  config/          # Config file + credentials file + profile management
   error.rs         # CliError enum
 tests/             # Integration tests using wiremock + assert_cmd
 ```
@@ -44,7 +44,7 @@ tests/             # Integration tests using wiremock + assert_cmd
 | `models/` | Serde structs for all Notion objects | Any logic beyond derive |
 | `filter/` | Future typed DSL parsing and lowering | HTTP, output |
 | `output/` | Serializing models to each output format | Fetching data |
-| `config/` | Config file I/O, profile CRUD, keyring access | HTTP, CLI args |
+| `config/` | Config file I/O, profile CRUD, credentials file access | HTTP, CLI args |
 | `error.rs` | Error types, exit codes, Display impls | Recovery logic |
 
 ## Coding Standards
@@ -64,7 +64,7 @@ tests/             # Integration tests using wiremock + assert_cmd
 - **Token bucket rate limiter** (3 req/s) with server-side Retry-After support.
 - **Cursor-based auto-pagination** via async Stream; `--all` fetches everything, `--limit N` caps total items.
 - **Filter input** currently uses `--filter-json`; the DSL remains planned until property types can be resolved safely.
-- **Token resolution**: `--token` flag > `NOTION_API_TOKEN` env > keyring > config file.
+- **Token resolution**: `--token` flag > `NOTION_API_TOKEN` env > credentials file (`credentials.json`, 0600) > legacy config file.
 - **Output format**: `--plain` default for TTY, `--json` for piping. All commands support all formats.
 
 ## API Version

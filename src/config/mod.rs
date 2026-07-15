@@ -10,8 +10,61 @@ use serde::{Deserialize, Serialize};
 use crate::error::CliError;
 use crate::output::OutputFormat;
 
-const SERVICE_NAME: &str = "notion-cli";
-const SECRET_SERVICE_NAME: &str = "notion-cli-oauth-secret";
+/// Secrets for all profiles, kept in a separate 0600 file so the main
+/// config stays free of credentials. No `Debug` derive: tokens must never
+/// reach logs or error output.
+#[derive(Default, Serialize, Deserialize)]
+pub struct CredentialsStore {
+    #[serde(default)]
+    tokens: HashMap<String, String>,
+    #[serde(default)]
+    oauth_secrets: HashMap<String, String>,
+}
+
+impl CredentialsStore {
+    /// Returns the credentials file path: `credentials.json` in the platform
+    /// config directory (`$XDG_CONFIG_HOME/notion-cli` on Linux,
+    /// `~/Library/Application Support/notion-cli` on macOS).
+    pub fn path() -> Result<PathBuf, CliError> {
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| CliError::Config("Cannot determine config directory".into()))?;
+        Ok(config_dir.join("notion-cli").join("credentials.json"))
+    }
+
+    /// Load credentials from disk, returning an empty store if the file doesn't exist.
+    /// Warns on stderr if the file is readable by group or others.
+    pub fn load() -> Result<Self, CliError> {
+        let path = Self::path()?;
+        let contents = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(e.into()),
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = fs::metadata(&path) {
+                if meta.permissions().mode() & 0o077 != 0 {
+                    eprintln!(
+                        "Warning: {} is readable by other users; run `chmod 600` on it",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        let store: Self = serde_json::from_str(&contents)?;
+        Ok(store)
+    }
+
+    /// Save credentials to disk with owner-only permissions.
+    pub fn save(&self) -> Result<(), CliError> {
+        let path = Self::path()?;
+        let contents = serde_json::to_string_pretty(self)?;
+        write_private(&path, &contents)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -27,14 +80,31 @@ fn default_profile_name() -> String {
     "default".to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Profile {
+    /// Legacy plaintext token slot; new logins keep this `None` and store
+    /// the token in the credentials file instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
     pub workspace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth_client_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth_client_secret: Option<String>,
+}
+
+impl std::fmt::Debug for Profile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Profile")
+            .field("token", &self.token.as_ref().map(|_| "***"))
+            .field("workspace_id", &self.workspace_id)
+            .field("oauth_client_id", &self.oauth_client_id)
+            .field(
+                "oauth_client_secret",
+                &self.oauth_client_secret.as_ref().map(|_| "***"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +142,49 @@ impl Default for Config {
     }
 }
 
+/// Atomically write `contents` to `path` with owner-only permissions,
+/// creating the parent directory (0700 on Unix) as needed.
+fn write_private(path: &std::path::Path, contents: &str) -> Result<(), CliError> {
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let temp_path = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+        let result = (|| -> Result<(), CliError> {
+            let mut file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&temp_path)?;
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+            fs::rename(&temp_path, path)?;
+            Ok(())
+        })();
+        // Don't leave a plaintext temp file behind on failure
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        result?;
+    }
+
+    #[cfg(not(unix))]
+    fs::write(path, contents)?;
+
+    Ok(())
+}
+
 impl Config {
     /// Returns the config file path: `$XDG_CONFIG_HOME/notion-cli/config.json`
     pub fn path() -> Result<PathBuf, CliError> {
@@ -98,25 +211,7 @@ impl Config {
             fs::create_dir_all(parent)?;
         }
         let contents = serde_json::to_string_pretty(self)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-
-            let temp_path = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
-            let mut file = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(&temp_path)?;
-            file.write_all(contents.as_bytes())?;
-            file.sync_all()?;
-            fs::rename(temp_path, &path)?;
-        }
-
-        #[cfg(not(unix))]
-        fs::write(&path, contents)?;
-
-        Ok(())
+        write_private(&path, &contents)
     }
 
     /// Get the current active profile.
@@ -127,8 +222,8 @@ impl Config {
     /// Resolve the API token using the priority chain:
     /// 1. Explicit token (from --token flag)
     /// 2. NOTION_API_TOKEN env var
-    /// 3. OS keyring
-    /// 4. Config file
+    /// 3. Credentials file
+    /// 4. Legacy plaintext token in the config file
     pub fn resolve_token(
         &self,
         explicit_token: Option<&str>,
@@ -148,14 +243,14 @@ impl Config {
 
         let profile_key = profile_name.unwrap_or(&self.default_profile);
 
-        // 3. OS keyring
-        if let Ok(entry) = keyring::Entry::new(SERVICE_NAME, profile_key) {
-            if let Ok(token) = entry.get_password() {
-                return Ok(token);
+        // 3. Credentials file
+        if let Ok(store) = CredentialsStore::load() {
+            if let Some(token) = store.tokens.get(profile_key) {
+                return Ok(token.clone());
             }
         }
 
-        // 4. Config file
+        // 4. Legacy config file (older versions stored the token here)
         if let Some(profile) = self.profiles.get(profile_key) {
             if let Some(ref t) = profile.token {
                 return Ok(t.clone());
@@ -165,28 +260,16 @@ impl Config {
         Err(CliError::NotAuthenticated)
     }
 
-    /// Store a token in the OS keyring, falling back to config file.
+    /// Store a token in the credentials file and clear any plaintext copy
+    /// from the config.
     pub fn store_token(&mut self, profile_name: &str, token: &str) -> Result<(), CliError> {
-        // Try keyring first
-        if let Ok(entry) = keyring::Entry::new(SERVICE_NAME, profile_name) {
-            if entry.set_password(token).is_ok() {
-                // Ensure profile exists; clear any plaintext token from config
-                let profile = self
-                    .profiles
-                    .entry(profile_name.to_string())
-                    .or_insert_with(|| Profile {
-                        token: None,
-                        workspace_id: None,
-                        oauth_client_id: None,
-                        oauth_client_secret: None,
-                    });
-                profile.token = None;
-                return Ok(());
-            }
-        }
+        let mut store = CredentialsStore::load()?;
+        store
+            .tokens
+            .insert(profile_name.to_string(), token.to_string());
+        store.save()?;
 
-        // Fallback: store in config file
-        eprintln!("Warning: OS keyring unavailable; storing token in the 0600 config file");
+        // Ensure profile exists; clear any plaintext token from config
         let profile = self
             .profiles
             .entry(profile_name.to_string())
@@ -196,58 +279,55 @@ impl Config {
                 oauth_client_id: None,
                 oauth_client_secret: None,
             });
-        profile.token = Some(token.to_string());
+        profile.token = None;
         Ok(())
     }
 
-    /// Delete a token from keyring and config.
+    /// Delete a token and OAuth secret from the credentials file and config.
     pub fn delete_token(&mut self, profile_name: &str) -> Result<(), CliError> {
-        if let Ok(entry) = keyring::Entry::new(SERVICE_NAME, profile_name) {
-            let _ = entry.delete_credential();
+        let mut store = CredentialsStore::load()?;
+        let removed_token = store.tokens.remove(profile_name).is_some();
+        let removed_secret = store.oauth_secrets.remove(profile_name).is_some();
+        if removed_token || removed_secret {
+            store.save()?;
         }
         if let Some(profile) = self.profiles.get_mut(profile_name) {
             profile.token = None;
+            profile.oauth_client_secret = None;
         }
         Ok(())
     }
 
-    /// Store an OAuth client secret in the OS keyring, falling back to config file.
+    /// Store an OAuth client secret in the credentials file and clear any
+    /// plaintext copy from the config.
     pub fn store_secret(&mut self, profile_name: &str, secret: &str) -> Result<(), CliError> {
-        if let Ok(entry) = keyring::Entry::new(SECRET_SERVICE_NAME, profile_name) {
-            if entry.set_password(secret).is_ok() {
-                // Clear plaintext from config
-                if let Some(profile) = self.profiles.get_mut(profile_name) {
-                    profile.oauth_client_secret = None;
-                }
-                return Ok(());
-            }
-        }
+        let mut store = CredentialsStore::load()?;
+        store
+            .oauth_secrets
+            .insert(profile_name.to_string(), secret.to_string());
+        store.save()?;
 
-        // Fallback: store in config file
-        eprintln!("Warning: OS keyring unavailable; storing OAuth secret in the 0600 config file");
-        let profile = self
-            .profiles
-            .entry(profile_name.to_string())
-            .or_insert_with(|| Profile {
-                token: None,
-                workspace_id: None,
-                oauth_client_id: None,
-                oauth_client_secret: None,
-            });
-        profile.oauth_client_secret = Some(secret.to_string());
+        if let Some(profile) = self.profiles.get_mut(profile_name) {
+            profile.oauth_client_secret = None;
+        }
         Ok(())
     }
 
-    /// Resolve OAuth client secret from keyring.
+    /// Resolve OAuth client secret from the credentials file, falling back
+    /// to a legacy plaintext copy in the config file.
     pub fn resolve_secret(&self, profile_name: Option<&str>) -> Result<String, CliError> {
         let profile_key = profile_name.unwrap_or(&self.default_profile);
-        if let Ok(entry) = keyring::Entry::new(SECRET_SERVICE_NAME, profile_key) {
-            if let Ok(secret) = entry.get_password() {
-                return Ok(secret);
+        let store = CredentialsStore::load()?;
+        if let Some(secret) = store.oauth_secrets.get(profile_key) {
+            return Ok(secret.clone());
+        }
+        if let Some(profile) = self.profiles.get(profile_key) {
+            if let Some(ref s) = profile.oauth_client_secret {
+                return Ok(s.clone());
             }
         }
         Err(CliError::Config(
-            "OAuth client secret not found in keyring".into(),
+            "OAuth client secret not found in the credentials file".into(),
         ))
     }
 
