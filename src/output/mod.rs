@@ -1,5 +1,6 @@
 pub mod csv_out;
 pub mod json;
+pub mod markdown;
 pub mod plain;
 pub mod table;
 pub mod yaml;
@@ -21,6 +22,7 @@ pub enum OutputFormat {
     Tsv,
     Plain,
     IdOnly,
+    Markdown,
 }
 
 impl fmt::Display for OutputFormat {
@@ -32,6 +34,7 @@ impl fmt::Display for OutputFormat {
             OutputFormat::Tsv => write!(f, "tsv"),
             OutputFormat::Plain => write!(f, "plain"),
             OutputFormat::IdOnly => write!(f, "id-only"),
+            OutputFormat::Markdown => write!(f, "markdown"),
         }
     }
 }
@@ -47,6 +50,7 @@ impl FromStr for OutputFormat {
             "tsv" => Ok(OutputFormat::Tsv),
             "plain" | "text" => Ok(OutputFormat::Plain),
             "id-only" | "id" | "ids" => Ok(OutputFormat::IdOnly),
+            "markdown" | "md" => Ok(OutputFormat::Markdown),
             _ => Err(format!("Unknown output format: {s}")),
         }
     }
@@ -70,6 +74,7 @@ pub fn format_value(
         OutputFormat::Csv => csv_out::write_csv(value, writer, b','),
         OutputFormat::Tsv => csv_out::write_csv(value, writer, b'\t'),
         OutputFormat::Plain => plain::write_plain(value, writer),
+        OutputFormat::Markdown => markdown::write_markdown(value, writer),
         OutputFormat::IdOnly => {
             if let Some(id) = value.get("id").and_then(|v| v.as_str()) {
                 writeln!(writer, "{id}")?;

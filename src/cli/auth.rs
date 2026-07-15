@@ -14,14 +14,23 @@ pub struct AuthCommand {
 
 #[derive(Subcommand)]
 pub enum AuthSubcommand {
-    /// Log in with a Notion API token
+    /// Log in with a Notion API token or via browser OAuth
     Login {
-        /// API token (prompted if not provided)
+        /// API token (prompted if not provided and --browser is not used)
         #[arg(long)]
         token: Option<String>,
         /// Profile name to store the token under
         #[arg(long, default_value = "default")]
         profile: String,
+        /// Use browser-based OAuth login (requires --client-id and --client-secret, or set via config)
+        #[arg(long)]
+        browser: bool,
+        /// OAuth client ID (can also be set via `notion config set oauth.client_id <id>`)
+        #[arg(long)]
+        client_id: Option<String>,
+        /// OAuth client secret (can also be set via `notion config set oauth.client_secret <secret>`)
+        #[arg(long)]
+        client_secret: Option<String>,
     },
     /// Log out and remove stored credentials
     Logout {
@@ -44,7 +53,19 @@ pub async fn run(
     global: &GlobalOpts,
 ) -> Result<(), CliError> {
     match cmd.command {
-        AuthSubcommand::Login { token, profile } => login(token, &profile, config, global).await,
+        AuthSubcommand::Login {
+            token,
+            profile,
+            browser,
+            client_id,
+            client_secret,
+        } => {
+            if browser {
+                login_browser(client_id, client_secret, &profile, config).await
+            } else {
+                login(token, &profile, config, global).await
+            }
+        }
         AuthSubcommand::Logout { profile } => logout(&profile, config).await,
         AuthSubcommand::Whoami => whoami(config, global).await,
         AuthSubcommand::Switch { profile } => switch(&profile, config).await,
@@ -100,6 +121,216 @@ async fn login(
 
     eprintln!("Logged in as {name} ({user_type}) on profile \"{profile}\"");
     Ok(())
+}
+
+async fn login_browser(
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    profile: &str,
+    config: &mut Config,
+) -> Result<(), CliError> {
+    // Resolve client_id and client_secret from flags or config
+    let client_id = client_id
+        .or_else(|| {
+            config
+                .profiles
+                .get(profile)
+                .and_then(|p| p.oauth_client_id.clone())
+        })
+        .ok_or_else(|| {
+            CliError::OAuth(
+                "Missing --client-id. Provide it as a flag or set it via: notion config set oauth.client_id <id>".into(),
+            )
+        })?;
+
+    let client_secret = client_secret
+        .or_else(|| {
+            config
+                .profiles
+                .get(profile)
+                .and_then(|p| p.oauth_client_secret.clone())
+        })
+        .ok_or_else(|| {
+            CliError::OAuth(
+                "Missing --client-secret. Provide it as a flag or set it via: notion config set oauth.client_secret <secret>".into(),
+            )
+        })?;
+
+    // Start a local TCP listener on a random port
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| CliError::OAuth(format!("Failed to bind local server: {e}")))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| CliError::OAuth(format!("Failed to get local address: {e}")))?
+        .port();
+
+    let redirect_uri = format!("http://localhost:{port}/callback");
+    let auth_url = format!(
+        "https://api.notion.com/v1/oauth/authorize?client_id={}&response_type=code&redirect_uri={}&owner=user",
+        client_id,
+        urlencoding::encode(&redirect_uri),
+    );
+
+    eprintln!("Opening browser for Notion authorization...");
+    eprintln!("If the browser doesn't open, visit: {auth_url}");
+
+    if let Err(e) = open::that(&auth_url) {
+        eprintln!("Failed to open browser: {e}");
+        eprintln!("Please open the URL above manually.");
+    }
+
+    eprintln!("Waiting for authorization callback on port {port}...");
+
+    // Accept one connection
+    let (mut stream, _) = listener
+        .accept()
+        .map_err(|e| CliError::OAuth(format!("Failed to accept connection: {e}")))?;
+
+    // Read the HTTP request
+    use std::io::{Read, Write};
+    let mut buf = [0u8; 4096];
+    let n = stream
+        .read(&mut buf)
+        .map_err(|e| CliError::OAuth(format!("Failed to read request: {e}")))?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+
+    // Extract the code from the query string
+    let code = extract_code_from_request(&request)?;
+
+    // Send a success response to the browser
+    let response_body = "<html><body><h2>Authorization successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    );
+    let _ = stream.write_all(response.as_bytes());
+
+    eprintln!("Authorization code received. Exchanging for token...");
+
+    // Exchange the code for an access token
+    let access_token =
+        exchange_code_for_token(&client_id, &client_secret, &code, &redirect_uri).await?;
+
+    // Validate by calling /v1/users/me
+    let client = NotionClient::new(access_token.clone())?;
+    let user = client.get_self().await?;
+
+    let name = user
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
+
+    // Store the token
+    config.store_token(profile, &access_token)?;
+
+    // Store OAuth credentials in the profile for future use
+    let p = config
+        .profiles
+        .entry(profile.to_string())
+        .or_insert_with(|| crate::config::Profile {
+            token: None,
+            workspace_id: None,
+            oauth_client_id: None,
+            oauth_client_secret: None,
+        });
+    p.oauth_client_id = Some(client_id);
+    p.oauth_client_secret = Some(client_secret);
+
+    // Store workspace info if available
+    if let Some(ws_name) = user
+        .get("bot")
+        .and_then(|b| b.get("workspace_name"))
+        .and_then(|v| v.as_str())
+    {
+        if let Some(p) = config.profiles.get_mut(profile) {
+            p.workspace_id = Some(ws_name.to_string());
+        }
+    }
+
+    config.save()?;
+
+    eprintln!("Logged in as {name} via OAuth on profile \"{profile}\"");
+    Ok(())
+}
+
+fn extract_code_from_request(request: &str) -> Result<String, CliError> {
+    // Parse the first line: GET /callback?code=...&state=... HTTP/1.1
+    let first_line = request
+        .lines()
+        .next()
+        .ok_or_else(|| CliError::OAuth("Empty request".into()))?;
+
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| CliError::OAuth("Malformed request".into()))?;
+
+    // Check for error in the callback
+    if path.contains("error=") {
+        return Err(CliError::OAuth(format!(
+            "Authorization denied or failed. Response path: {path}"
+        )));
+    }
+
+    // Extract code parameter
+    let url = url::Url::parse(&format!("http://localhost{path}"))
+        .map_err(|e| CliError::OAuth(format!("Failed to parse callback URL: {e}")))?;
+
+    let code = url
+        .query_pairs()
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.to_string())
+        .ok_or_else(|| CliError::OAuth("No authorization code in callback".into()))?;
+
+    Ok(code)
+}
+
+async fn exchange_code_for_token(
+    client_id: &str,
+    client_secret: &str,
+    code: &str,
+    redirect_uri: &str,
+) -> Result<String, CliError> {
+    use base64::Engine;
+
+    let credentials =
+        base64::engine::general_purpose::STANDARD.encode(format!("{client_id}:{client_secret}"));
+
+    let http = reqwest::Client::new();
+    let resp = http
+        .post("https://api.notion.com/v1/oauth/token")
+        .header("Authorization", format!("Basic {credentials}"))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        }))
+        .send()
+        .await
+        .map_err(|e| CliError::OAuth(format!("Token exchange request failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(CliError::OAuth(format!(
+            "Token exchange failed ({status}): {body}"
+        )));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| CliError::OAuth(format!("Failed to parse token response: {e}")))?;
+
+    let access_token = body
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CliError::OAuth("No access_token in response".into()))?
+        .to_string();
+
+    Ok(access_token)
 }
 
 async fn logout(profile: &str, config: &mut Config) -> Result<(), CliError> {

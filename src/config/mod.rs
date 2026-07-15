@@ -27,6 +27,10 @@ fn default_profile_name() -> String {
 pub struct Profile {
     pub token: Option<String>,
     pub workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth_client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth_client_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +163,8 @@ impl Config {
                     .or_insert_with(|| Profile {
                         token: None,
                         workspace_id: None,
+                        oauth_client_id: None,
+                        oauth_client_secret: None,
                     });
                 return Ok(());
             }
@@ -171,6 +177,8 @@ impl Config {
             .or_insert_with(|| Profile {
                 token: None,
                 workspace_id: None,
+                oauth_client_id: None,
+                oauth_client_secret: None,
             });
         profile.token = Some(token.to_string());
         Ok(())
@@ -193,6 +201,14 @@ impl Config {
             "default_profile" => Some(self.default_profile.clone()),
             "defaults.output_format" => Some(format!("{}", self.defaults.output_format)),
             "defaults.page_size" => Some(self.defaults.page_size.to_string()),
+            k if k.starts_with("oauth.") => {
+                let profile = self.active_profile()?;
+                match k {
+                    "oauth.client_id" => profile.oauth_client_id.clone(),
+                    "oauth.client_secret" => profile.oauth_client_secret.as_ref().map(|_| "***".to_string()),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -217,6 +233,32 @@ impl Config {
                     return Err(CliError::Config("Page size must be 1-100".into()));
                 }
                 self.defaults.page_size = size;
+            }
+            "oauth.client_id" => {
+                let profile_key = self.default_profile.clone();
+                let profile = self
+                    .profiles
+                    .entry(profile_key)
+                    .or_insert_with(|| Profile {
+                        token: None,
+                        workspace_id: None,
+                        oauth_client_id: None,
+                        oauth_client_secret: None,
+                    });
+                profile.oauth_client_id = Some(value.to_string());
+            }
+            "oauth.client_secret" => {
+                let profile_key = self.default_profile.clone();
+                let profile = self
+                    .profiles
+                    .entry(profile_key)
+                    .or_insert_with(|| Profile {
+                        token: None,
+                        workspace_id: None,
+                        oauth_client_id: None,
+                        oauth_client_secret: None,
+                    });
+                profile.oauth_client_secret = Some(value.to_string());
             }
             _ => {
                 return Err(CliError::Config(format!("Unknown config key: {key}")));

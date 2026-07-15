@@ -51,6 +51,21 @@ impl NotionClient {
         .await
     }
 
+    /// Send a PUT request with a JSON body.
+    pub async fn put(&self, path: &str, body: &Value) -> Result<Value, CliError> {
+        let url = self.base_url.join(path).map_err(|e| {
+            CliError::Config(format!("Invalid API path {path}: {e}"))
+        })?;
+
+        self.request_with_retry(|| {
+            self.http
+                .put(url.clone())
+                .headers(self.notion_headers())
+                .json(body)
+        })
+        .await
+    }
+
     /// Send a DELETE request.
     pub async fn delete(&self, path: &str) -> Result<Value, CliError> {
         let url = self.base_url.join(path).map_err(|e| {

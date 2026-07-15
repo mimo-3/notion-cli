@@ -24,6 +24,28 @@ impl NotionClient {
         self.post("/v1/pages", &body).await
     }
 
+    /// Get page content as markdown (Notion's native markdown endpoint).
+    pub async fn get_page_markdown(&self, page_id: &str) -> Result<String, CliError> {
+        let value = self.get(&format!("/v1/pages/{page_id}/content")).await?;
+        // The endpoint returns { "markdown": "..." }
+        Ok(value
+            .get("markdown")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string())
+    }
+
+    /// Update page content with markdown (PUT).
+    pub async fn update_page_markdown(
+        &self,
+        page_id: &str,
+        markdown: &str,
+    ) -> Result<Value, CliError> {
+        let body = json!({ "markdown": markdown });
+        self.put(&format!("/v1/pages/{page_id}/content"), &body)
+            .await
+    }
+
     pub async fn update_page(
         &self,
         page_id: &str,
