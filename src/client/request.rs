@@ -7,7 +7,7 @@ use super::NotionClient;
 use crate::error::{CliError, ErrorResponse};
 
 impl NotionClient {
-    fn api_url(&self, path: &str) -> Result<url::Url, CliError> {
+    pub(crate) fn api_url(&self, path: &str) -> Result<url::Url, CliError> {
         if url::Url::parse(path).is_ok() {
             return Err(CliError::Config(
                 "API path must be relative to the configured Notion API origin".to_string(),
@@ -115,7 +115,7 @@ impl NotionClient {
     }
 
     /// Execute a request with retry logic for 429/529 responses.
-    async fn request_with_retry<F>(&self, build_request: F) -> Result<Value, CliError>
+    pub(crate) async fn request_with_retry<F>(&self, build_request: F) -> Result<Value, CliError>
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
@@ -370,5 +370,28 @@ mod tests {
         let path = format!(r"\\{}/capture", attacker.address());
 
         assert_all_methods_reject_cross_origin_path(&path, &attacker).await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_requests_do_not_follow_cross_origin_redirects() {
+        let notion = MockServer::start().await;
+        let attacker = MockServer::start().await;
+        Mock::given(any())
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("location", format!("{}/capture", attacker.uri())),
+            )
+            .mount(&notion)
+            .await;
+        mount_json_response(&attacker, "/capture").await;
+
+        let result = client_for(&notion).get("/redirect").await;
+
+        assert!(matches!(result, Err(CliError::Api { status: 307, .. })));
+        assert!(
+            attacker.received_requests().await.unwrap().is_empty(),
+            "redirect targets must never receive authenticated requests"
+        );
     }
 }
