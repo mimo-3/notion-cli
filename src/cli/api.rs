@@ -33,9 +33,7 @@ pub async fn run(
         let input = std::io::read_to_string(std::io::stdin())?;
         Some(serde_json::from_str(&input)?)
     } else {
-        args.data
-            .map(|d| serde_json::from_str(&d))
-            .transpose()?
+        args.data.map(|d| serde_json::from_str(&d)).transpose()?
     };
 
     let result = match args.method.to_uppercase().as_str() {
@@ -44,7 +42,9 @@ pub async fn run(
         "PATCH" => client.patch(&args.path, &body.unwrap_or(json!({}))).await?,
         "DELETE" => client.delete(&args.path).await?,
         other => {
-            return Err(CliError::Config(format!("Unsupported HTTP method: {other}")));
+            return Err(CliError::Config(format!(
+                "Unsupported HTTP method: {other}"
+            )));
         }
     };
 
