@@ -47,13 +47,7 @@ impl NotionClient {
             )
             .text("part_number", part_number.to_string());
 
-        let response = self
-            .http
-            .post(upload_url)
-            .headers(self.notion_headers())
-            .multipart(form)
-            .send()
-            .await?;
+        let response = self.http.post(upload_url).multipart(form).send().await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -79,7 +73,8 @@ impl NotionClient {
 
     /// Get file upload metadata.
     pub async fn get_file_upload(&self, file_upload_id: &str) -> Result<Value, CliError> {
-        self.get(&format!("/v1/file-uploads/{file_upload_id}")).await
+        self.get(&format!("/v1/file-uploads/{file_upload_id}"))
+            .await
     }
 
     /// List file uploads.
@@ -194,5 +189,47 @@ pub fn detect_content_type(filename: &str) -> &'static str {
         "ppt" => "application/vnd.ms-powerpoint",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn presigned_upload_does_not_receive_notion_credentials() {
+        let upload_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&upload_server)
+            .await;
+        let client = NotionClient::new("secret_test_token".to_string())
+            .unwrap()
+            .with_base_url(Url::parse("https://api.notion.com/").unwrap());
+
+        client
+            .upload_file_part(
+                &upload_server.uri(),
+                b"test file contents".to_vec(),
+                1,
+                "text/plain",
+            )
+            .await
+            .unwrap();
+
+        let requests = upload_server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let headers = &requests[0].headers;
+        assert!(
+            !headers.contains_key("authorization"),
+            "a pre-signed upload must not receive the bearer token"
+        );
+        assert!(
+            !headers.contains_key("notion-version"),
+            "a pre-signed upload must not receive the Notion API version"
+        );
     }
 }
