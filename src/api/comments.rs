@@ -17,6 +17,7 @@ impl NotionClient {
         .await
     }
 
+    #[allow(dead_code)]
     pub async fn create_comment(
         &self,
         parent_id: &str,
