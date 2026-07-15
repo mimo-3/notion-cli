@@ -84,9 +84,9 @@ async fn run(cli: Cli) -> Result<(), error::CliError> {
             let client = client::NotionClient::from_opts(&cli.global, &config)?;
             cli::user::run(cmd, &client, &cli.global).await
         }
-        Command::File(_cmd) => {
-            eprintln!("File commands are not yet implemented (Phase 2).");
-            Ok(())
+        Command::File(cmd) => {
+            let client = client::NotionClient::from_opts(&cli.global, &config)?;
+            cli::file::run(cmd, &client, &cli.global).await
         }
         Command::View(_cmd) => {
             eprintln!("View commands are not yet implemented (Phase 2).");
