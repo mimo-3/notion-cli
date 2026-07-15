@@ -82,8 +82,7 @@ pub async fn run(
                                 fetch_all: true,
                                 ..Default::default()
                             };
-                            let children =
-                                client.get_block_children(block_id, &child_opts).await?;
+                            let children = client.get_block_children(block_id, &child_opts).await?;
                             for child in children.into_iter().rev() {
                                 stack.push(child);
                             }
