@@ -33,6 +33,7 @@ impl NotionClient {
 
         let http = reqwest::Client::builder()
             .user_agent(format!("notion-cli/{}", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
         Ok(Self {
@@ -50,6 +51,7 @@ impl NotionClient {
         let base_url = Url::parse(DEFAULT_BASE_URL).expect("default base URL should always parse");
         let http = reqwest::Client::builder()
             .user_agent(format!("notion-cli/{}", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
         Ok(Self {
