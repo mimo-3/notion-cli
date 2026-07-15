@@ -135,10 +135,12 @@ impl NotionClient {
             }
 
             let sep = if base_path.contains('?') { '&' } else { '?' };
-            let mut path = format!("{base_path}{sep}page_size={}", opts.page_size);
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            query.append_pair("page_size", &opts.page_size.to_string());
             if let Some(ref c) = cursor {
-                path.push_str(&format!("&start_cursor={c}"));
+                query.append_pair("start_cursor", c);
             }
+            let path = format!("{base_path}{sep}{}", query.finish());
 
             let response = self.get(&path).await?;
 
@@ -198,7 +200,10 @@ impl NotionClient {
 mod tests {
     use serde_json::json;
     use url::Url;
-    use wiremock::{matchers::any, Mock, MockServer, ResponseTemplate};
+    use wiremock::{
+        matchers::{any, method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     use super::*;
 
@@ -378,5 +383,30 @@ mod tests {
         };
         let result = client.paginate_get("/v1/test", &opts).await.unwrap();
         assert_eq!(result.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn paginate_get_url_encodes_opaque_cursor() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/test"))
+            .and(query_param("page_size", "50"))
+            .and(query_param("start_cursor", "a&b+#%"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [],
+                "has_more": false
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let opts = PaginationOpts {
+            start_cursor: Some("a&b+#%".to_string()),
+            ..Default::default()
+        };
+        client_for(&server)
+            .paginate_get("/v1/test", &opts)
+            .await
+            .unwrap();
     }
 }
