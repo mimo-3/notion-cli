@@ -318,7 +318,7 @@ async fn login_browser(
             oauth_client_secret: None,
         });
     p.oauth_client_id = Some(client_id);
-    // Store client_secret in keyring; clear plaintext from config
+    // Store client_secret in the credentials file; clear plaintext from config
     config.store_secret(profile, &client_secret)?;
 
     // Store workspace info if available
