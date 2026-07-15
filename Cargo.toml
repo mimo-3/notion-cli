@@ -5,6 +5,18 @@ edition = "2021"
 rust-version = "1.75"
 description = "A command-line interface for the Notion API"
 license = "MIT"
+repository = "https://github.com/mimo-3/notion-cli"
+readme = "README.md"
+keywords = ["notion", "cli", "api", "productivity"]
+categories = ["command-line-utilities", "api-bindings"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "LICENSE",
+    "README.md",
+    "docs/comparison.png",
+    "src/**",
+]
 
 [[bin]]
 name = "notion"

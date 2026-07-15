@@ -16,13 +16,16 @@
 | colored | 2.x | Terminal color output |
 | thiserror | 2.x | Error type derivation |
 | anyhow | 1.x | Application-level error handling |
-| chrono | 0.4 | Date parsing for filter DSL |
-| pest | 2.x | PEG parser for filter DSL |
+| chrono | 0.4 | Date handling; reserved for the planned filter DSL |
+| pest | 2.x | Planned PEG parser for the filter DSL (not yet enabled) |
 | wiremock | 0.6+ | HTTP mock server for integration tests |
 | assert_cmd / predicates | latest | CLI integration testing |
 | tracing / tracing-subscriber | 0.1 / 0.3 | Structured logging (--verbose) |
 
-## 2. Project Structure
+## 2. Target Project Structure
+
+This tree includes planned modules. Entries marked as planned are not present in the
+current release.
 
 ```
 notion-cli/
@@ -85,11 +88,11 @@ notion-cli/
 │   │   ├── view.rs           # View
 │   │   ├── common.rs         # Parent, Icon, Cover, Color, Emoji, IdOrUrl
 │   │   └── response.rs       # PaginatedResponse<T>, ErrorResponse
-│   ├── filter/
-│   │   ├── mod.rs            # Public parse_filter() function
-│   │   ├── parser.rs         # Pest grammar consumer
-│   │   ├── ast.rs            # FilterExpr, CompoundFilter, PropertyFilter
-│   │   └── filter.pest       # PEG grammar file
+│   ├── filter/                # Planned typed DSL
+│   │   ├── mod.rs            # Placeholder in the current release
+│   │   ├── parser.rs         # Planned: Pest grammar consumer
+│   │   ├── ast.rs            # Planned: FilterExpr and compound filters
+│   │   └── filter.pest       # Planned: PEG grammar file
 │   ├── output/
 │   │   ├── mod.rs            # OutputFormat enum, format_output() dispatch
 │   │   ├── json.rs           # JSON (pretty / compact)
@@ -109,7 +112,7 @@ notion-cli/
     ├── test_search.rs
     ├── test_page.rs
     ├── test_db_query.rs
-    └── test_filter_parser.rs
+    └── test_filter_parser.rs  # Planned with the typed DSL
 ```
 
 ## 3. Core Abstractions
@@ -177,7 +180,10 @@ pub fn format_output<T: Serialize + Displayable>(
 - `Csv`/`Tsv` flatten nested properties into columns; only meaningful for list/query results
 - `IdOnly` extracts just the `id` field, one per line
 
-### 3.4 Filter DSL
+### 3.4 Filter DSL (planned)
+
+The current CLI exposes only `--filter-json`. The grammar below is a future design;
+it is not accepted by the released command until property-type resolution is implemented.
 
 PEG grammar (simplified):
 
@@ -191,9 +197,10 @@ operator   = { "=" | "!=" | ">" | ">=" | "<" | "<=" | "contains" | "does_not_con
 value      = { quoted_string | number | date_literal | "true" | "false" | "today" }
 ```
 
-The parser produces an AST (`FilterExpr`) which is lowered to the Notion API filter JSON structure. `today` is expanded to the current date at parse time.
+The planned parser will produce an AST (`FilterExpr`) and lower it to the Notion API
+filter JSON structure. `today` would be expanded to the current date at parse time.
 
-Limitation: Mixed AND/OR at the same level requires explicit parentheses (mirrors Notion's restriction that compound filters use either `and` or `or`, not both).
+Planned limitation: mixed AND/OR at the same level will require explicit parentheses.
 
 ### 3.5 Error Types
 
@@ -366,8 +373,8 @@ The `paginate()` method on `NotionClient` returns an `async Stream` that handles
 
 ### Unit Tests (`#[cfg(test)]` in each module)
 
-- **filter/parser.rs**: Parse various DSL expressions, verify AST
-- **filter/mod.rs**: DSL-to-JSON lowering
+- **filter/parser.rs** (planned): Parse DSL expressions and verify the AST
+- **filter/mod.rs** (planned): DSL-to-JSON lowering
 - **output/**: Format model objects in each format, snapshot test output
 - **config/**: Load/save config files, profile resolution
 - **models/**: Serde round-trip tests (deserialize API JSON, re-serialize)
@@ -381,7 +388,7 @@ The `paginate()` method on `NotionClient` returns an `async Stream` that handles
   - Search returns results in each output format
   - Db query with filters, pagination, output formats
   - Error handling (401, 429 with retry, 404)
-- Filter DSL end-to-end: DSL string -> API request body
+- Filter JSON end-to-end: raw JSON -> API request body
 
 ### Test Conventions
 
@@ -439,7 +446,7 @@ Phase 1 delivers the highest-value commands that cover the most common CLI workf
 | `auth login/logout/whoami` | P0 | Required for everything else |
 | `search` | P0 | Highest-value gap vs ntn; enables discovery |
 | `page get/content/create` | P0 | Core CRUD, most common operation |
-| `db get/query` | P0 | Database queries with filter DSL are the killer feature |
+| `db get/query` | P0 | Data source queries with raw JSON filters |
 | `user me` | P0 | Needed for auth validation |
 | `config get/set/list` | P0 | Profile management |
 | Global flags & output formats | P0 | `--json`, `--plain`, `--csv` on all commands |
@@ -452,9 +459,7 @@ Phase 1 delivers the highest-value commands that cover the most common CLI workf
 - Comments (Phase 2)
 - Views (Phase 2)
 - File upload (Phase 2)
-- Data sources (Phase 3)
 - `api` raw passthrough (Phase 2)
-- OAuth browser flow (Phase 3; Phase 1 uses token-based auth only)
 - Interactive/TUI mode (Phase 3+)
 
 ### Phase 1 milestones
@@ -464,5 +469,5 @@ Phase 1 delivers the highest-value commands that cover the most common CLI workf
 3. **Auth + User**: `auth login/logout/whoami`, `user me`, keyring storage
 4. **Search**: `search` command with all output formats
 5. **Pages**: `page get/content/create` with markdown I/O
-6. **Database query**: `db get/query` with filter DSL, sort, output formats
+6. **Data source query**: `db get/query` with filter JSON, sort, output formats
 7. **Polish**: Shell completions, `--dry-run`, README, CI/CD pipeline

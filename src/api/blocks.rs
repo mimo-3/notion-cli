@@ -14,11 +14,8 @@ impl NotionClient {
         block_id: &str,
         pagination: &PaginationOpts,
     ) -> Result<Vec<Value>, CliError> {
-        self.paginate_get(
-            &format!("/v1/blocks/{block_id}/children"),
-            pagination,
-        )
-        .await
+        self.paginate_get(&format!("/v1/blocks/{block_id}/children"), pagination)
+            .await
     }
 
     pub async fn append_block_children(

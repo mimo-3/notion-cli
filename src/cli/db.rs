@@ -20,13 +20,10 @@ pub enum DbSubcommand {
         /// Database ID or URL
         id: String,
     },
-    /// Query a database with optional filters
+    /// Query a data source with optional filters
     Query {
-        /// Database ID or URL
-        id: String,
-        /// Filter expression (DSL syntax)
-        #[arg(long)]
-        filter: Option<String>,
+        /// Data source ID or URL (not the database ID)
+        data_source_id: String,
         /// Filter as raw JSON
         #[arg(long)]
         filter_json: Option<String>,
@@ -49,7 +46,7 @@ pub enum DbSubcommand {
         #[arg(long)]
         cursor: Option<String>,
     },
-    /// List all databases (via search)
+    /// List all data sources (via search)
     List {
         /// Fetch all results
         #[arg(long)]
@@ -87,8 +84,7 @@ pub async fn run(
             output::format_value(&db, format, &mut stdout)
         }
         DbSubcommand::Query {
-            id,
-            filter: _filter_dsl,
+            data_source_id,
             filter_json,
             sort,
             direction,
@@ -97,10 +93,8 @@ pub async fn run(
             page_size,
             cursor,
         } => {
-            let id = crate::normalize_id(&id);
-            let filter = filter_json
-                .map(|f| serde_json::from_str(&f))
-                .transpose()?;
+            let data_source_id = crate::normalize_id(&data_source_id);
+            let filter = filter_json.map(|f| serde_json::from_str(&f)).transpose()?;
             let sorts = sort.map(|s| {
                 vec![json!({
                     "property": s,
@@ -113,7 +107,9 @@ pub async fn run(
                 fetch_all: all,
                 limit,
             };
-            let results = client.query_database(&id, filter, sorts, &pagination).await?;
+            let results = client
+                .query_data_source(&data_source_id, filter, sorts, &pagination)
+                .await?;
             output::format_value(&Value::Array(results), format, &mut stdout)
         }
         DbSubcommand::List { all, limit } => {
@@ -124,7 +120,13 @@ pub async fn run(
                 limit,
             };
             let results = client
-                .search("", Some("database"), "descending", "last_edited_time", &pagination)
+                .search(
+                    "",
+                    Some("data_source"),
+                    "descending",
+                    "last_edited_time",
+                    &pagination,
+                )
                 .await?;
             output::format_value(&Value::Array(results), format, &mut stdout)
         }
@@ -142,12 +144,7 @@ pub async fn run(
                     "Name": { "title": {} }
                 })
             };
-            let body = json!({
-                "parent": { "page_id": parent_id },
-                "title": [{ "type": "text", "text": { "content": title } }],
-                "properties": props,
-            });
-            let db = client.post("/v1/databases", &body).await?;
+            let db = client.create_database(&parent_id, &title, props).await?;
             output::format_value(&db, format, &mut stdout)
         }
     }

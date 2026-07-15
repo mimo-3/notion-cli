@@ -41,7 +41,11 @@ pub async fn run(cmd: ConfigCommand, config: &mut Config) -> Result<(), CliError
         ConfigSubcommand::Set { key, value } => {
             config.set_value(&key, &value)?;
             config.save()?;
-            println!("{key} = {value}");
+            if key.contains("secret") || key.contains("token") {
+                println!("{key} = ***");
+            } else {
+                println!("{key} = {value}");
+            }
             Ok(())
         }
         ConfigSubcommand::List => {

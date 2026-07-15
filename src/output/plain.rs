@@ -11,6 +11,7 @@ pub fn write_plain(value: &serde_json::Value, writer: &mut dyn Write) -> Result<
             match obj_type {
                 Some("page") => write_page_plain(map, writer)?,
                 Some("database") => write_database_plain(map, writer)?,
+                Some("data_source") => write_data_source_plain(map, writer)?,
                 Some("user") => write_user_plain(map, writer)?,
                 Some("block") => write_block_plain(map, writer)?,
                 Some("comment") => write_comment_plain(map, writer)?,
@@ -46,6 +47,18 @@ pub fn write_plain(value: &serde_json::Value, writer: &mut dyn Write) -> Result<
             writeln!(writer, "{}", format_value_short(other))?;
         }
     }
+    Ok(())
+}
+
+fn write_data_source_plain(
+    map: &serde_json::Map<String, serde_json::Value>,
+    writer: &mut dyn Write,
+) -> Result<(), CliError> {
+    let id = map.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+    let title = extract_title_from_rich_text(map.get("title"));
+
+    writeln!(writer, "Data source: {title}")?;
+    writeln!(writer, "  ID:  {id}")?;
     Ok(())
 }
 

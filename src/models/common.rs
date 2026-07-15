@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Parent {
     DatabaseId { database_id: String },
+    DataSourceId { data_source_id: String },
     PageId { page_id: String },
     BlockId { block_id: String },
     Workspace { workspace: bool },

@@ -17,6 +17,7 @@ pub struct NotionClient {
     pub(crate) token: String,
     pub(crate) api_version: String,
     pub(crate) max_retries: u32,
+    pub(crate) dry_run: bool,
 }
 
 impl NotionClient {
@@ -28,11 +29,11 @@ impl NotionClient {
             .clone()
             .unwrap_or_else(|| DEFAULT_API_VERSION.to_string());
 
-        let base_url =
-            Url::parse(DEFAULT_BASE_URL).expect("default base URL should always parse");
+        let base_url = Url::parse(DEFAULT_BASE_URL).expect("default base URL should always parse");
 
         let http = reqwest::Client::builder()
             .user_agent(format!("notion-cli/{}", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
         Ok(Self {
@@ -41,15 +42,16 @@ impl NotionClient {
             token,
             api_version,
             max_retries: 3,
+            dry_run: opts.dry_run,
         })
     }
 
     /// Build a NotionClient directly from a token (for testing or simple use).
     pub fn new(token: String) -> Result<Self, CliError> {
-        let base_url =
-            Url::parse(DEFAULT_BASE_URL).expect("default base URL should always parse");
+        let base_url = Url::parse(DEFAULT_BASE_URL).expect("default base URL should always parse");
         let http = reqwest::Client::builder()
             .user_agent(format!("notion-cli/{}", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
         Ok(Self {
@@ -58,6 +60,7 @@ impl NotionClient {
             token,
             api_version: DEFAULT_API_VERSION.to_string(),
             max_retries: 3,
+            dry_run: false,
         })
     }
 

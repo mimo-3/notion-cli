@@ -233,7 +233,9 @@ fn render_block(
             writeln!(writer)?;
         }
         "table_row" => {
-            if let Some(cells) = type_data.and_then(|d| d.get("cells")).and_then(|v| v.as_array())
+            if let Some(cells) = type_data
+                .and_then(|d| d.get("cells"))
+                .and_then(|v| v.as_array())
             {
                 let cell_texts: Vec<String> = cells
                     .iter()

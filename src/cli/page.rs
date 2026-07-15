@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 
 use crate::cli::GlobalOpts;
@@ -13,6 +13,25 @@ use crate::output;
 pub struct PageCommand {
     #[command(subcommand)]
     pub command: PageSubcommand,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum PageParentType {
+    /// A regular Notion page
+    Page,
+    /// A database data source (use the data source ID, not the database ID)
+    DataSource,
+}
+
+impl PageParentType {
+    fn parent(self, id: String) -> Value {
+        match self {
+            Self::Page => json!({ "type": "page_id", "page_id": id }),
+            Self::DataSource => {
+                json!({ "type": "data_source_id", "data_source_id": id })
+            }
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -40,7 +59,7 @@ pub enum PageSubcommand {
     },
     /// Create a new page
     Create {
-        /// Parent page or database ID
+        /// Parent page or data source ID
         #[arg(long)]
         parent: String,
         /// Page title
@@ -49,9 +68,9 @@ pub enum PageSubcommand {
         /// Read content from stdin as JSON blocks
         #[arg(long)]
         stdin: bool,
-        /// Parent type: page or database
-        #[arg(long, default_value = "page")]
-        parent_type: String,
+        /// Parent type: page or data-source
+        #[arg(long, value_enum, default_value_t = PageParentType::Page)]
+        parent_type: PageParentType,
     },
     /// Update page properties
     Update {
@@ -84,12 +103,12 @@ pub enum PageSubcommand {
     Move {
         /// Page ID
         id: String,
-        /// New parent page or database ID
+        /// New parent page or data source ID
         #[arg(long)]
         parent: String,
-        /// Parent type: page_id or database_id
-        #[arg(long, default_value = "page_id")]
-        parent_type: String,
+        /// Parent type: page or data-source
+        #[arg(long, value_enum, default_value_t = PageParentType::Page)]
+        parent_type: PageParentType,
     },
 }
 
@@ -155,12 +174,8 @@ pub async fn run(
             parent_type,
         } => {
             let parent_id = crate::normalize_id(&parent);
-            let parent_val = if parent_type == "database" {
-                json!({ "database_id": parent_id })
-            } else {
-                json!({ "page_id": parent_id })
-            };
-            let properties = if parent_type == "database" {
+            let parent_val = parent_type.parent(parent_id);
+            let properties = if matches!(parent_type, PageParentType::DataSource) {
                 json!({
                     "title": {
                         "title": [{ "type": "text", "text": { "content": title } }]
@@ -226,12 +241,31 @@ pub async fn run(
         } => {
             let id = crate::normalize_id(&id);
             let parent_id = crate::normalize_id(&parent);
-            let body = json!({
-                "parent": { &parent_type: parent_id }
-            });
-            let result = client.post(&format!("/v1/pages/{id}/move"), &body).await?;
+            let parent_val = parent_type.parent(parent_id);
+            let result = client.move_page(&id, parent_val).await?;
             eprintln!("Page {id} moved.");
             output::format_value(&result, format, &mut stdout)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_source_parent_uses_typed_data_source_id() {
+        assert_eq!(
+            PageParentType::DataSource.parent("source-123".to_string()),
+            json!({"type": "data_source_id", "data_source_id": "source-123"})
+        );
+    }
+
+    #[test]
+    fn page_parent_uses_typed_page_id() {
+        assert_eq!(
+            PageParentType::Page.parent("page-123".to_string()),
+            json!({"type": "page_id", "page_id": "page-123"})
+        );
     }
 }

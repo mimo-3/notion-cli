@@ -50,7 +50,7 @@
 | POST | `/v1/oauth/token/revoke` | Revoke an OAuth token |
 | GET | `/v1/oauth/token/introspect` | Introspect a token |
 
-### Pages (7 endpoints)
+### Pages (8 endpoints)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -60,18 +60,16 @@
 | DELETE | `/v1/pages/{page_id}` | Trash a page |
 | POST | `/v1/pages/{page_id}/move` | Move a page to new parent |
 | GET | `/v1/pages/{page_id}/properties/{property_id}` | Retrieve a page property item (paginated) |
-| GET | `/v1/pages/{page_id}/content` | Retrieve page content as markdown |
-| PUT | `/v1/pages/{page_id}/content` | Update page content as markdown |
+| GET | `/v1/pages/{page_id}/markdown` | Retrieve page content as markdown |
+| PATCH | `/v1/pages/{page_id}/markdown` | Update page content as markdown |
 
-### Databases (5 endpoints)
+### Databases (3 endpoints)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/v1/databases` | Create a database |
-| GET | `/v1/databases` | List databases |
 | GET | `/v1/databases/{database_id}` | Retrieve a database schema |
 | PATCH | `/v1/databases/{database_id}` | Update database title, description, schema, icon, cover |
-| POST | `/v1/databases/{database_id}/query` | Query database rows with filters and sorts |
 
 ### Blocks (5 endpoints)
 
@@ -115,7 +113,7 @@
 | GET | `/v1/data_sources/{data_source_id}` | Retrieve a data source |
 | PATCH | `/v1/data_sources/{data_source_id}` | Update a data source |
 | POST | `/v1/data_sources/{data_source_id}/query` | Query a data source |
-| GET | `/v1/data_source_templates` | List data source templates |
+| GET | `/v1/data_sources/{data_source_id}/templates` | List templates for a data source |
 
 ### Views (7 endpoints)
 
@@ -130,15 +128,15 @@
 | GET | `/v1/views/{view_id}/query_results` | Get view query results |
 | DELETE | `/v1/views/{view_id}/query` | Delete a view query |
 
-### Files (4 endpoints)
+### File Uploads (5 endpoints)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/v1/files` | Create a file upload |
-| POST | `/v1/files/{file_id}/upload` | Send file upload data |
-| POST | `/v1/files/{file_id}/complete` | Complete a file upload |
-| GET | `/v1/files/{file_id}` | Retrieve a file upload |
-| GET | `/v1/files` | List file uploads |
+| POST | `/v1/file_uploads` | Create a file upload |
+| POST | `/v1/file_uploads/{file_upload_id}/send` | Send file upload data |
+| POST | `/v1/file_uploads/{file_upload_id}/complete` | Complete a multi-part upload |
+| GET | `/v1/file_uploads/{file_upload_id}` | Retrieve a file upload |
+| GET | `/v1/file_uploads` | List file uploads |
 
 ### Meeting Notes (1 endpoint)
 
@@ -307,18 +305,18 @@ Our CLI should support:
 | API Capability | ntn Status | Opportunity |
 |----------------|-----------|-------------|
 | **Search** (`POST /v1/search`) | No command | High-value `search` command |
-| **Database CRUD** | No command | `db create/get/update/delete/query` |
+| **Database CRUD** | No command | `db create/get/update/delete` |
 | **Block operations** | No command | `block get/update/delete/children/append` |
 | **Comments** | No command | `comment create/list/get/update/delete` |
 | **User listing** | Only `whoami` | `user list/get/me` |
 | **Page property editing** | Not via `pages` | `page update` with property flags |
 | **Page move** | No command | `page move` |
 | **Views** | No command | `view create/list/get/update/delete/query` |
-| **Database query** | Only via datasources | Direct `db query` with filters |
+| **Data source query** | Available via datasources | `db query` with raw JSON filters |
 | **Partial page editing** | Replaces entire content | Block-level append/update |
 | **Bulk operations** | One-at-a-time | Batch commands with rate limiting |
 | **Output formats** | Markdown + JSON | Add YAML, CSV, TSV for database queries |
-| **Filtering syntax** | Raw JSON only | Human-friendly filter DSL |
+| **Filtering syntax** | Raw JSON only | Raw JSON with pagination and output controls |
 | **Interactive mode** | Only workers TUI | General-purpose interactive browse/edit |
 | **Pipe-friendly** | Partial | Consistent stdin/stdout/stderr conventions |
 
@@ -341,7 +339,7 @@ Our CLI should support:
 2. **Consistent output**: `--json`, `--plain`, `--yaml`, `--csv` on all commands
 3. **Pipe-friendly**: stdin for content, stdout for data, stderr for status
 4. **Pagination built-in**: `--limit`, `--all` (auto-paginate), `--cursor`
-5. **Human-friendly filters**: `--filter 'status = Done'` DSL alongside `--filter-json`
+5. **Explicit filters**: `--filter-json` accepts the exact Notion filter contract
 6. **Rate-limit aware**: built-in retry with exponential backoff
 
 ### Command Tree
@@ -355,17 +353,17 @@ notion
 │   └── switch <profile>   # Switch named profile
 │
 ├── search <query>         # POST /v1/search
-│   ├── --type page|database
+│   ├── --filter page|data_source
 │   ├── --sort relevance|last_edited
 │   └── --limit N / --all
 │
 ├── page
 │   ├── get <page_id>      # Retrieve page properties
 │   ├── content <page_id>  # Get page content as markdown
-│   ├── create             # Create page (--parent, --title, --props, stdin for content)
+│   ├── create             # Create page (--parent, --parent-type page|data-source)
 │   ├── update <page_id>   # Update properties, icon, cover, lock, archive
 │   ├── edit <page_id>     # Replace content (markdown via stdin or --content)
-│   ├── move <page_id>     # Move to new parent (--parent)
+│   ├── move <page_id>     # Move to page/data-source parent (--parent, --parent-type)
 │   ├── trash <page_id>    # Soft-delete
 │   ├── restore <page_id>  # Restore from trash
 │   └── prop <page_id> <property_id>  # Get single property (paginated)
@@ -374,13 +372,12 @@ notion
 │   ├── get <db_id>        # Retrieve database schema
 │   ├── create             # Create database (--parent, --title, --props-json)
 │   ├── update <db_id>     # Update schema, title, description
-│   ├── query <db_id>      # Query rows with filters and sorts
-│   │   ├── --filter <DSL>
+│   ├── query <ds_id>      # Query a data source with filters and sorts
 │   │   ├── --filter-json <JSON>
 │   │   ├── --sort <prop> [asc|desc]
 │   │   ├── --props <prop1,prop2>  # filter_properties
 │   │   └── --limit N / --all
-│   ├── list               # List all databases
+│   ├── list               # List data sources via search
 │   └── trash <db_id>      # Archive database
 │
 ├── block
@@ -433,23 +430,13 @@ notion
     └── list               # Show all config
 ```
 
-### Filter DSL (for `db query`)
+### Filter DSL (planned)
 
-Human-friendly filter syntax that compiles to Notion filter JSON:
+The current CLI intentionally accepts only `--filter-json`. A future DSL may compile
+human-friendly expressions to Notion filter JSON once property-type resolution is defined.
 
 ```
-# Simple property filters
---filter 'Status = Done'
---filter 'Priority != Low'
---filter 'Due Date < 2026-08-01'
---filter 'Tags contains Backend'
---filter 'Assignee is_empty'
-
-# Compound filters
---filter 'Status = "In Progress" AND Priority = High'
---filter '(Status = Done OR Status = Cancelled) AND Due Date < today'
-
-# Raw JSON fallback
+# Current syntax
 --filter-json '{"property": "Status", "status": {"equals": "Done"}}'
 ```
 

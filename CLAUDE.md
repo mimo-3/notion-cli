@@ -1,6 +1,6 @@
 # notion-cli
 
-Rust CLI for the Notion API. Fills gaps left by the official `ntn` CLI: search, database query with human-friendly filters, block/comment/view operations, multiple output formats, named profiles.
+Rust CLI for the Notion API. Fills gaps left by the official `ntn` CLI: search, data source query with raw JSON filters, block/comment/view operations, multiple output formats, named profiles.
 
 ## Build / Test / Run
 
@@ -27,7 +27,7 @@ src/
   client/          # NotionClient, rate limiting, retry, pagination
   api/             # API method implementations (one file per resource)
   models/          # Serde types mirroring Notion API objects
-  filter/          # Filter DSL parser (pest PEG grammar)
+  filter/          # Reserved for a future typed filter DSL
   output/          # Output formatters (json, yaml, csv, plain, id_only)
   config/          # Config file + keyring + profile management
   error.rs         # CliError enum
@@ -42,7 +42,7 @@ tests/             # Integration tests using wiremock + assert_cmd
 | `client/` | HTTP transport, auth headers, rate limiting, retry, pagination | Notion domain knowledge |
 | `api/` | Mapping commands to API endpoints, request/response shaping | Arg parsing, output formatting |
 | `models/` | Serde structs for all Notion objects | Any logic beyond derive |
-| `filter/` | DSL parsing, AST, lowering to Notion filter JSON | HTTP, output |
+| `filter/` | Future typed DSL parsing and lowering | HTTP, output |
 | `output/` | Serializing models to each output format | Fetching data |
 | `config/` | Config file I/O, profile CRUD, keyring access | HTTP, CLI args |
 | `error.rs` | Error types, exit codes, Display impls | Recovery logic |
@@ -63,7 +63,7 @@ tests/             # Integration tests using wiremock + assert_cmd
 
 - **Token bucket rate limiter** (3 req/s) with server-side Retry-After support.
 - **Cursor-based auto-pagination** via async Stream; `--all` fetches everything, `--limit N` caps total items.
-- **Filter DSL** compiles to Notion filter JSON. Mixed AND/OR requires parentheses (matches API constraint).
+- **Filter input** currently uses `--filter-json`; the DSL remains planned until property types can be resolved safely.
 - **Token resolution**: `--token` flag > `NOTION_API_TOKEN` env > keyring > config file.
 - **Output format**: `--plain` default for TTY, `--json` for piping. All commands support all formats.
 
@@ -73,4 +73,4 @@ All requests send `Notion-Version: 2026-03-11`. Override with `--api-version`.
 
 ## Phase 1 Scope
 
-Auth, search, page (get/content/create), db (get/query with filter DSL), user me, config, all output formats, rate limiting, pagination. See ARCHITECTURE.md for full phasing.
+Auth, search, page (get/content/create), db (get/query with raw JSON filters), user me, config, all output formats, rate limiting, pagination. See ARCHITECTURE.md for full phasing.

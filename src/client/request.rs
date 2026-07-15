@@ -7,7 +7,7 @@ use super::NotionClient;
 use crate::error::{CliError, ErrorResponse};
 
 impl NotionClient {
-    fn api_url(&self, path: &str) -> Result<url::Url, CliError> {
+    pub(crate) fn api_url(&self, path: &str) -> Result<url::Url, CliError> {
         if url::Url::parse(path).is_ok() {
             return Err(CliError::Config(
                 "API path must be relative to the configured Notion API origin".to_string(),
@@ -40,6 +40,10 @@ impl NotionClient {
     pub async fn post(&self, path: &str, body: &Value) -> Result<Value, CliError> {
         let url = self.api_url(path)?;
 
+        if self.dry_run {
+            return self.dry_run_log("POST", &url, Some(body));
+        }
+
         self.request_with_retry(|| {
             self.http
                 .post(url.clone())
@@ -52,6 +56,10 @@ impl NotionClient {
     /// Send a PATCH request with a JSON body.
     pub async fn patch(&self, path: &str, body: &Value) -> Result<Value, CliError> {
         let url = self.api_url(path)?;
+
+        if self.dry_run {
+            return self.dry_run_log("PATCH", &url, Some(body));
+        }
 
         self.request_with_retry(|| {
             self.http
@@ -67,6 +75,10 @@ impl NotionClient {
     pub async fn put(&self, path: &str, body: &Value) -> Result<Value, CliError> {
         let url = self.api_url(path)?;
 
+        if self.dry_run {
+            return self.dry_run_log("PUT", &url, Some(body));
+        }
+
         self.request_with_retry(|| {
             self.http
                 .put(url.clone())
@@ -80,12 +92,30 @@ impl NotionClient {
     pub async fn delete(&self, path: &str) -> Result<Value, CliError> {
         let url = self.api_url(path)?;
 
+        if self.dry_run {
+            return self.dry_run_log("DELETE", &url, None);
+        }
+
         self.request_with_retry(|| self.http.delete(url.clone()).headers(self.notion_headers()))
             .await
     }
 
+    /// Log a dry-run request to stderr and return a dummy success response.
+    fn dry_run_log(
+        &self,
+        method: &str,
+        url: &url::Url,
+        body: Option<&Value>,
+    ) -> Result<Value, CliError> {
+        eprintln!("[dry-run] {} {}", method, url);
+        if let Some(body) = body {
+            eprintln!("[dry-run] body: {}", body);
+        }
+        Ok(serde_json::json!({}))
+    }
+
     /// Execute a request with retry logic for 429/529 responses.
-    async fn request_with_retry<F>(&self, build_request: F) -> Result<Value, CliError>
+    pub(crate) async fn request_with_retry<F>(&self, build_request: F) -> Result<Value, CliError>
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
@@ -267,6 +297,72 @@ mod tests {
         assert_all_methods_reject_cross_origin_path(&path, &attacker).await;
     }
 
+    fn dry_run_client_for(server: &MockServer) -> NotionClient {
+        let base_url = Url::parse(&format!("{}/", server.uri())).unwrap();
+        let mut client = NotionClient::new(TEST_TOKEN.to_string())
+            .unwrap()
+            .with_base_url(base_url);
+        client.dry_run = true;
+        client
+    }
+
+    #[tokio::test]
+    async fn dry_run_post_returns_empty_json_without_sending() {
+        let server = MockServer::start().await;
+        mount_json_response(&server, "/v1/test").await;
+        let client = dry_run_client_for(&server);
+
+        let result = client.post("/v1/test", &json!({"x": 1})).await.unwrap();
+        assert_eq!(result, json!({}));
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "dry-run POST must not send a request"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_patch_returns_empty_json_without_sending() {
+        let server = MockServer::start().await;
+        mount_json_response(&server, "/v1/test").await;
+        let client = dry_run_client_for(&server);
+
+        let result = client.patch("/v1/test", &json!({"x": 1})).await.unwrap();
+        assert_eq!(result, json!({}));
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "dry-run PATCH must not send a request"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_delete_returns_empty_json_without_sending() {
+        let server = MockServer::start().await;
+        mount_json_response(&server, "/v1/test").await;
+        let client = dry_run_client_for(&server);
+
+        let result = client.delete("/v1/test").await.unwrap();
+        assert_eq!(result, json!({}));
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "dry-run DELETE must not send a request"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_get_still_executes() {
+        let server = MockServer::start().await;
+        mount_json_response(&server, "/v1/test").await;
+        let client = dry_run_client_for(&server);
+
+        let result = client.get("/v1/test").await.unwrap();
+        assert_eq!(result, json!({"ok": true}));
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "dry-run GET must still send the request"
+        );
+    }
+
     #[tokio::test]
     async fn all_request_methods_reject_backslash_authority_urls_before_sending() {
         let attacker = MockServer::start().await;
@@ -274,5 +370,28 @@ mod tests {
         let path = format!(r"\\{}/capture", attacker.address());
 
         assert_all_methods_reject_cross_origin_path(&path, &attacker).await;
+    }
+
+    #[tokio::test]
+    async fn authenticated_requests_do_not_follow_cross_origin_redirects() {
+        let notion = MockServer::start().await;
+        let attacker = MockServer::start().await;
+        Mock::given(any())
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("location", format!("{}/capture", attacker.uri())),
+            )
+            .mount(&notion)
+            .await;
+        mount_json_response(&attacker, "/capture").await;
+
+        let result = client_for(&notion).get("/redirect").await;
+
+        assert!(matches!(result, Err(CliError::Api { status: 307, .. })));
+        assert!(
+            attacker.received_requests().await.unwrap().is_empty(),
+            "redirect targets must never receive authenticated requests"
+        );
     }
 }

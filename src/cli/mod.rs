@@ -15,7 +15,11 @@ use clap::{Args, Parser, Subcommand};
 use crate::output::OutputFormat;
 
 #[derive(Parser)]
-#[command(name = "notion", version, about = "Command-line interface for the Notion API")]
+#[command(
+    name = "notion",
+    version,
+    about = "Command-line interface for the Notion API"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -94,4 +98,51 @@ pub enum Command {
     Api(api::ApiArgs),
     /// Manage CLI configuration
     Config(config_cmd::ConfigCommand),
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{error::ErrorKind, Parser};
+
+    use super::*;
+
+    #[test]
+    fn db_query_rejects_unimplemented_filter_dsl() {
+        let error = Cli::try_parse_from([
+            "notion",
+            "db",
+            "query",
+            "source-id",
+            "--filter",
+            "Status = Done",
+        ])
+        .err()
+        .expect("the unpublished filter DSL must be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn db_query_accepts_raw_filter_json() {
+        let cli = Cli::try_parse_from([
+            "notion",
+            "db",
+            "query",
+            "source-id",
+            "--filter-json",
+            r#"{"property":"Status","status":{"equals":"Done"}}"#,
+        ])
+        .expect("raw Notion filter JSON should remain supported");
+
+        let Command::Db(db) = cli.command else {
+            panic!("expected db command");
+        };
+        let db::DbSubcommand::Query { filter_json, .. } = db.command else {
+            panic!("expected db query command");
+        };
+        assert_eq!(
+            filter_json.as_deref(),
+            Some(r#"{"property":"Status","status":{"equals":"Done"}}"#)
+        );
+    }
 }

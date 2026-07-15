@@ -47,11 +47,7 @@ pub fn write_csv(
     for row in &rows {
         let fields: Vec<String> = headers
             .iter()
-            .map(|h| {
-                row.get(h)
-                    .map(value_to_string)
-                    .unwrap_or_default()
-            })
+            .map(|h| row.get(h).map(value_to_string).unwrap_or_default())
             .collect();
         csv_writer
             .write_record(&fields)
