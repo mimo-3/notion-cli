@@ -6,7 +6,6 @@ use crate::cli::GlobalOpts;
 use crate::client::pagination::PaginationOpts;
 use crate::client::NotionClient;
 use crate::error::CliError;
-use crate::normalize_id;
 use crate::output;
 
 #[derive(Args)]
@@ -17,13 +16,10 @@ pub struct FileCommand {
 
 #[derive(Subcommand)]
 pub enum FileSubcommand {
-    /// Upload a file to a Notion page
+    /// Upload a file to Notion
     Upload {
         /// Path to the file
         path: String,
-        /// Parent page ID or URL
-        #[arg(long)]
-        parent: String,
     },
     /// Get file upload metadata
     Get {
@@ -50,9 +46,7 @@ pub async fn run(
     let mut stdout = std::io::stdout();
 
     match cmd.command {
-        FileSubcommand::Upload { path, parent } => {
-            let parent_id = normalize_id(&parent);
-
+        FileSubcommand::Upload { path } => {
             let file_path = std::path::Path::new(&path);
             if !file_path.exists() {
                 return Err(CliError::Config(format!("File not found: {path}")));
@@ -64,23 +58,18 @@ pub async fn run(
                 .unwrap_or("file");
 
             let content_type = detect_content_type(filename);
-            let file_data = std::fs::read(file_path)?;
+            let file_size = std::fs::metadata(file_path)?.len();
 
-            eprintln!(
-                "File: {} ({} bytes, {})",
-                filename,
-                file_data.len(),
-                content_type
-            );
+            eprintln!("File: {} ({} bytes, {})", filename, file_size, content_type);
 
             let result = client
-                .upload_file(file_data, filename, content_type, &parent_id)
+                .upload_file_path(file_path, filename, content_type)
                 .await?;
 
             output::format_value(&result, format, &mut stdout)
         }
         FileSubcommand::Get { id } => {
-            let file_id = normalize_id(&id);
+            let file_id = crate::normalize_id(&id);
             let result = client.get_file_upload(&file_id).await?;
             output::format_value(&result, format, &mut stdout)
         }
