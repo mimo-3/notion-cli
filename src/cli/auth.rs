@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use rand::Rng;
 
 use crate::cli::GlobalOpts;
 use crate::client::NotionClient;
@@ -156,6 +157,13 @@ async fn login_browser(
             )
         })?;
 
+    // Generate a CSPRNG state parameter for CSRF protection
+    let state: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+
     // Start a local TCP listener on a random port
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .map_err(|e| CliError::OAuth(format!("Failed to bind local server: {e}")))?;
@@ -164,11 +172,17 @@ async fn login_browser(
         .map_err(|e| CliError::OAuth(format!("Failed to get local address: {e}")))?
         .port();
 
+    // Set a 5-minute timeout on the listener
+    listener
+        .set_nonblocking(false)
+        .map_err(|e| CliError::OAuth(format!("Failed to configure listener: {e}")))?;
+
     let redirect_uri = format!("http://localhost:{port}/callback");
     let auth_url = format!(
-        "https://api.notion.com/v1/oauth/authorize?client_id={}&response_type=code&redirect_uri={}&owner=user",
+        "https://api.notion.com/v1/oauth/authorize?client_id={}&response_type=code&redirect_uri={}&owner=user&state={}",
         client_id,
         urlencoding::encode(&redirect_uri),
+        urlencoding::encode(&state),
     );
 
     eprintln!("Opening browser for Notion authorization...");
@@ -181,30 +195,81 @@ async fn login_browser(
 
     eprintln!("Waiting for authorization callback on port {port}...");
 
-    // Accept one connection
-    let (mut stream, _) = listener
-        .accept()
-        .map_err(|e| CliError::OAuth(format!("Failed to accept connection: {e}")))?;
-
-    // Read the HTTP request
     use std::io::{Read, Write};
-    let mut buf = [0u8; 4096];
-    let n = stream
-        .read(&mut buf)
-        .map_err(|e| CliError::OAuth(format!("Failed to read request: {e}")))?;
-    let request = String::from_utf8_lossy(&buf[..n]);
 
-    // Extract the code from the query string
-    let code = extract_code_from_request(&request)?;
+    // Loop to accept connections, rejecting invalid ones (max 10 attempts)
+    let mut code = String::new();
+    let max_attempts = 10;
+    for attempt in 0..max_attempts {
+        // Set a 5-minute accept timeout via SO_RCVTIMEO
+        let timeout = std::time::Duration::from_secs(300);
+        listener
+            .set_nonblocking(false)
+            .map_err(|e| CliError::OAuth(format!("Failed to configure listener: {e}")))?;
 
-    // Send a success response to the browser
-    let response_body = "<html><body><h2>Authorization successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>";
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        response_body.len(),
-        response_body
-    );
-    let _ = stream.write_all(response.as_bytes());
+        let (mut stream, peer_addr) = match listener.accept() {
+            Ok(conn) => conn,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(CliError::OAuth(
+                    "Timed out waiting for authorization callback".into(),
+                ));
+            }
+            Err(e) => {
+                return Err(CliError::OAuth(format!("Failed to accept connection: {e}")));
+            }
+        };
+
+        // Set read timeout on the stream
+        let _ = stream.set_read_timeout(Some(timeout));
+
+        // Only accept connections from localhost
+        if !peer_addr.ip().is_loopback() {
+            let _ = send_error_response(&mut stream, 403, "Forbidden");
+            continue;
+        }
+
+        // Read the HTTP request
+        let mut buf = [0u8; 4096];
+        let n = match stream.read(&mut buf) {
+            Ok(n) => n,
+            Err(_) => {
+                let _ = send_error_response(&mut stream, 400, "Bad Request");
+                continue;
+            }
+        };
+        let request = String::from_utf8_lossy(&buf[..n]);
+
+        // Validate and extract code with state verification
+        match extract_code_from_request(&request, &state) {
+            Ok(extracted_code) => {
+                // Send success response
+                let response_body = "<html><body><h2>Authorization successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                code = extracted_code;
+                break;
+            }
+            Err(e) => {
+                eprintln!(
+                    "Rejected connection (attempt {}/{}): {e}",
+                    attempt + 1,
+                    max_attempts
+                );
+                let _ = send_error_response(&mut stream, 400, "Invalid callback request");
+                continue;
+            }
+        }
+    }
+
+    if code.is_empty() {
+        return Err(CliError::OAuth(
+            "Failed to receive valid authorization callback after maximum attempts".into(),
+        ));
+    }
 
     eprintln!("Authorization code received. Exchanging for token...");
 
@@ -254,17 +319,51 @@ async fn login_browser(
     Ok(())
 }
 
-fn extract_code_from_request(request: &str) -> Result<String, CliError> {
+/// Send an HTTP error response to the client.
+fn send_error_response(
+    stream: &mut impl std::io::Write,
+    status: u16,
+    message: &str,
+) -> Result<(), std::io::Error> {
+    let body = format!("<html><body><h2>{status} {message}</h2></body></html>");
+    let response = format!(
+        "HTTP/1.1 {status} {message}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes())
+}
+
+/// Extract and validate the authorization code from the OAuth callback request.
+///
+/// Validates that the request is a GET to /callback with a matching state parameter.
+fn extract_code_from_request(request: &str, expected_state: &str) -> Result<String, CliError> {
     // Parse the first line: GET /callback?code=...&state=... HTTP/1.1
     let first_line = request
         .lines()
         .next()
         .ok_or_else(|| CliError::OAuth("Empty request".into()))?;
 
-    let path = first_line
-        .split_whitespace()
-        .nth(1)
+    let mut parts = first_line.split_whitespace();
+
+    // Validate HTTP method is GET
+    let method = parts
+        .next()
         .ok_or_else(|| CliError::OAuth("Malformed request".into()))?;
+    if method != "GET" {
+        return Err(CliError::OAuth(format!(
+            "Expected GET method, got {method}"
+        )));
+    }
+
+    let path = parts
+        .next()
+        .ok_or_else(|| CliError::OAuth("Malformed request".into()))?;
+
+    // Validate path starts with /callback
+    if !path.starts_with("/callback") {
+        return Err(CliError::OAuth(format!("Unexpected path: {path}")));
+    }
 
     // Check for error in the callback
     if path.contains("error=") {
@@ -273,10 +372,24 @@ fn extract_code_from_request(request: &str) -> Result<String, CliError> {
         )));
     }
 
-    // Extract code parameter
+    // Parse query parameters
     let url = url::Url::parse(&format!("http://localhost{path}"))
         .map_err(|e| CliError::OAuth(format!("Failed to parse callback URL: {e}")))?;
 
+    // Validate state parameter matches
+    let received_state = url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.to_string())
+        .ok_or_else(|| CliError::OAuth("Missing state parameter in callback".into()))?;
+
+    if received_state != expected_state {
+        return Err(CliError::OAuth(
+            "State parameter mismatch — possible CSRF attack".into(),
+        ));
+    }
+
+    // Extract code parameter
     let code = url
         .query_pairs()
         .find(|(k, _)| k == "code")
