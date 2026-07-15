@@ -22,7 +22,9 @@ pub struct CredentialsStore {
 }
 
 impl CredentialsStore {
-    /// Returns the credentials file path: `$XDG_CONFIG_HOME/notion-cli/credentials.json`
+    /// Returns the credentials file path: `credentials.json` in the platform
+    /// config directory (`$XDG_CONFIG_HOME/notion-cli` on Linux,
+    /// `~/Library/Application Support/notion-cli` on macOS).
     pub fn path() -> Result<PathBuf, CliError> {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| CliError::Config("Cannot determine config directory".into()))?;
@@ -30,12 +32,28 @@ impl CredentialsStore {
     }
 
     /// Load credentials from disk, returning an empty store if the file doesn't exist.
+    /// Warns on stderr if the file is readable by group or others.
     pub fn load() -> Result<Self, CliError> {
         let path = Self::path()?;
-        if !path.exists() {
-            return Ok(Self::default());
+        let contents = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(e.into()),
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = fs::metadata(&path) {
+                if meta.permissions().mode() & 0o077 != 0 {
+                    eprintln!(
+                        "Warning: {} is readable by other users; run `chmod 600` on it",
+                        path.display()
+                    );
+                }
+            }
         }
-        let contents = fs::read_to_string(&path)?;
+
         let store: Self = serde_json::from_str(&contents)?;
         Ok(store)
     }
@@ -128,11 +146,13 @@ impl Default for Config {
 /// creating the parent directory (0700 on Unix) as needed.
 fn write_private(path: &std::path::Path, contents: &str) -> Result<(), CliError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+            }
         }
     }
 
@@ -141,14 +161,22 @@ fn write_private(path: &std::path::Path, contents: &str) -> Result<(), CliError>
         use std::os::unix::fs::OpenOptionsExt;
 
         let temp_path = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temp_path)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(temp_path, path)?;
+        let result = (|| -> Result<(), CliError> {
+            let mut file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&temp_path)?;
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+            fs::rename(&temp_path, path)?;
+            Ok(())
+        })();
+        // Don't leave a plaintext temp file behind on failure
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        result?;
     }
 
     #[cfg(not(unix))]
@@ -255,14 +283,17 @@ impl Config {
         Ok(())
     }
 
-    /// Delete a token from the credentials file and config.
+    /// Delete a token and OAuth secret from the credentials file and config.
     pub fn delete_token(&mut self, profile_name: &str) -> Result<(), CliError> {
         let mut store = CredentialsStore::load()?;
-        if store.tokens.remove(profile_name).is_some() {
+        let removed_token = store.tokens.remove(profile_name).is_some();
+        let removed_secret = store.oauth_secrets.remove(profile_name).is_some();
+        if removed_token || removed_secret {
             store.save()?;
         }
         if let Some(profile) = self.profiles.get_mut(profile_name) {
             profile.token = None;
+            profile.oauth_client_secret = None;
         }
         Ok(())
     }
@@ -282,12 +313,18 @@ impl Config {
         Ok(())
     }
 
-    /// Resolve OAuth client secret from the credentials file.
+    /// Resolve OAuth client secret from the credentials file, falling back
+    /// to a legacy plaintext copy in the config file.
     pub fn resolve_secret(&self, profile_name: Option<&str>) -> Result<String, CliError> {
         let profile_key = profile_name.unwrap_or(&self.default_profile);
         let store = CredentialsStore::load()?;
         if let Some(secret) = store.oauth_secrets.get(profile_key) {
             return Ok(secret.clone());
+        }
+        if let Some(profile) = self.profiles.get(profile_key) {
+            if let Some(ref s) = profile.oauth_client_secret {
+                return Ok(s.clone());
+            }
         }
         Err(CliError::Config(
             "OAuth client secret not found in the credentials file".into(),
