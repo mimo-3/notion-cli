@@ -2,7 +2,7 @@ pub mod csv_out;
 pub mod json;
 pub mod markdown;
 pub mod plain;
-pub mod table;
+
 pub mod yaml;
 
 use std::fmt;
@@ -54,12 +54,6 @@ impl FromStr for OutputFormat {
             _ => Err(format!("Unknown output format: {s}")),
         }
     }
-}
-
-/// Trait for types that can render themselves in plain-text format.
-pub trait Displayable {
-    fn display_plain(&self, writer: &mut dyn Write) -> Result<(), CliError>;
-    fn display_id(&self, writer: &mut dyn Write) -> Result<(), CliError>;
 }
 
 /// Format any serializable value to the given output format.

@@ -16,9 +16,11 @@ pub enum CliError {
     RateLimited { retry_after: u64 },
 
     #[error("Invalid filter: {0}")]
+    #[allow(dead_code)]
     FilterParse(String),
 
     #[error("Invalid ID format: {0}")]
+    #[allow(dead_code)]
     InvalidId(String),
 
     #[error("Config error: {0}")]
