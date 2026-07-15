@@ -3,6 +3,9 @@ use serde_json::Value;
 use super::NotionClient;
 use crate::error::CliError;
 
+/// Safety limit to prevent infinite pagination loops.
+const MAX_PAGES: u32 = 10_000;
+
 /// Options controlling pagination behavior.
 #[derive(Debug, Clone)]
 pub struct PaginationOpts {
@@ -34,9 +37,18 @@ impl NotionClient {
     ) -> Result<Vec<Value>, CliError> {
         let mut all_results = Vec::new();
         let mut cursor = opts.start_cursor.clone();
+        let mut prev_cursor: Option<String> = None;
         let limit = opts.limit.unwrap_or(u32::MAX);
+        let mut page_count: u32 = 0;
 
         loop {
+            page_count += 1;
+            if page_count > MAX_PAGES {
+                return Err(CliError::Pagination(format!(
+                    "Exceeded maximum page count ({MAX_PAGES})"
+                )));
+            }
+
             let mut body = base_body.clone();
             if let Some(obj) = body.as_object_mut() {
                 obj.insert(
@@ -81,6 +93,22 @@ impl NotionClient {
                 .get("next_cursor")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+
+            match cursor {
+                None => {
+                    return Err(CliError::Pagination(
+                        "Server indicated has_more=true but returned no next_cursor".into(),
+                    ));
+                }
+                Some(ref new_c) if Some(new_c) == prev_cursor.as_ref() => {
+                    return Err(CliError::Pagination(
+                        "Server returned the same cursor twice".into(),
+                    ));
+                }
+                _ => {}
+            }
+
+            prev_cursor = cursor.clone();
         }
 
         Ok(all_results)
@@ -94,9 +122,18 @@ impl NotionClient {
     ) -> Result<Vec<Value>, CliError> {
         let mut all_results = Vec::new();
         let mut cursor = opts.start_cursor.clone();
+        let mut prev_cursor: Option<String> = None;
         let limit = opts.limit.unwrap_or(u32::MAX);
+        let mut page_count: u32 = 0;
 
         loop {
+            page_count += 1;
+            if page_count > MAX_PAGES {
+                return Err(CliError::Pagination(format!(
+                    "Exceeded maximum page count ({MAX_PAGES})"
+                )));
+            }
+
             let sep = if base_path.contains('?') { '&' } else { '?' };
             let mut path = format!("{base_path}{sep}page_size={}", opts.page_size);
             if let Some(ref c) = cursor {
@@ -135,6 +172,22 @@ impl NotionClient {
                 .get("next_cursor")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+
+            match cursor {
+                None => {
+                    return Err(CliError::Pagination(
+                        "Server indicated has_more=true but returned no next_cursor".into(),
+                    ));
+                }
+                Some(ref new_c) if Some(new_c) == prev_cursor.as_ref() => {
+                    return Err(CliError::Pagination(
+                        "Server returned the same cursor twice".into(),
+                    ));
+                }
+                _ => {}
+            }
+
+            prev_cursor = cursor.clone();
         }
 
         Ok(all_results)
