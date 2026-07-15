@@ -40,6 +40,10 @@ impl NotionClient {
     pub async fn post(&self, path: &str, body: &Value) -> Result<Value, CliError> {
         let url = self.api_url(path)?;
 
+        if self.dry_run {
+            return self.dry_run_log("POST", &url, Some(body));
+        }
+
         self.request_with_retry(|| {
             self.http
                 .post(url.clone())
@@ -52,6 +56,10 @@ impl NotionClient {
     /// Send a PATCH request with a JSON body.
     pub async fn patch(&self, path: &str, body: &Value) -> Result<Value, CliError> {
         let url = self.api_url(path)?;
+
+        if self.dry_run {
+            return self.dry_run_log("PATCH", &url, Some(body));
+        }
 
         self.request_with_retry(|| {
             self.http
@@ -67,6 +75,10 @@ impl NotionClient {
     pub async fn put(&self, path: &str, body: &Value) -> Result<Value, CliError> {
         let url = self.api_url(path)?;
 
+        if self.dry_run {
+            return self.dry_run_log("PUT", &url, Some(body));
+        }
+
         self.request_with_retry(|| {
             self.http
                 .put(url.clone())
@@ -80,8 +92,26 @@ impl NotionClient {
     pub async fn delete(&self, path: &str) -> Result<Value, CliError> {
         let url = self.api_url(path)?;
 
+        if self.dry_run {
+            return self.dry_run_log("DELETE", &url, None);
+        }
+
         self.request_with_retry(|| self.http.delete(url.clone()).headers(self.notion_headers()))
             .await
+    }
+
+    /// Log a dry-run request to stderr and return a dummy success response.
+    fn dry_run_log(
+        &self,
+        method: &str,
+        url: &url::Url,
+        body: Option<&Value>,
+    ) -> Result<Value, CliError> {
+        eprintln!("[dry-run] {} {}", method, url);
+        if let Some(body) = body {
+            eprintln!("[dry-run] body: {}", body);
+        }
+        Ok(serde_json::json!({}))
     }
 
     /// Execute a request with retry logic for 429/529 responses.
