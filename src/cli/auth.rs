@@ -145,16 +145,20 @@ async fn login_browser(
         })?;
 
     let client_secret = client_secret
+        .or_else(|| config.resolve_secret(Some(profile)).ok())
         .or_else(|| {
             config
                 .profiles
                 .get(profile)
                 .and_then(|p| p.oauth_client_secret.clone())
         })
-        .ok_or_else(|| {
-            CliError::OAuth(
-                "Missing --client-secret. Provide it as a flag or set it via: notion config set oauth.client_secret <secret>".into(),
-            )
+        .map(Ok)
+        .unwrap_or_else(|| {
+            // Prompt for secret via stdin to avoid argv exposure
+            dialoguer::Password::new()
+                .with_prompt("Enter your OAuth client secret")
+                .interact()
+                .map_err(|e| CliError::OAuth(format!("Failed to read client secret: {e}")))
         })?;
 
     // Generate a CSPRNG state parameter for CSRF protection
@@ -300,7 +304,8 @@ async fn login_browser(
             oauth_client_secret: None,
         });
     p.oauth_client_id = Some(client_id);
-    p.oauth_client_secret = Some(client_secret);
+    // Store client_secret in keyring; clear plaintext from config
+    config.store_secret(profile, &client_secret)?;
 
     // Store workspace info if available
     if let Some(ws_name) = user
