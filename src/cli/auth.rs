@@ -268,12 +268,16 @@ async fn login_browser(
                 break;
             }
             Err(e) => {
+                let authorization_denied = matches!(&e, CliError::OAuth(message) if message.starts_with("Authorization denied"));
                 eprintln!(
                     "Rejected connection (attempt {}/{}): {e}",
                     attempt + 1,
                     max_attempts
                 );
                 let _ = send_error_response(&mut stream, 400, "Invalid callback request");
+                if authorization_denied {
+                    return Err(e);
+                }
                 continue;
             }
         }
@@ -380,13 +384,6 @@ fn extract_code_from_request(request: &str, expected_state: &str) -> Result<Stri
         return Err(CliError::OAuth(format!("Unexpected path: {path}")));
     }
 
-    // Check for error in the callback
-    if path.contains("error=") {
-        return Err(CliError::OAuth(format!(
-            "Authorization denied or failed. Response path: {path}"
-        )));
-    }
-
     // Parse query parameters
     let url = url::Url::parse(&format!("http://localhost{path}"))
         .map_err(|e| CliError::OAuth(format!("Failed to parse callback URL: {e}")))?;
@@ -402,6 +399,16 @@ fn extract_code_from_request(request: &str, expected_state: &str) -> Result<Stri
         return Err(CliError::OAuth(
             "State parameter mismatch — possible CSRF attack".into(),
         ));
+    }
+
+    if let Some(error) = url
+        .query_pairs()
+        .find(|(key, _)| key == "error")
+        .map(|(_, value)| value.to_string())
+    {
+        return Err(CliError::OAuth(format!(
+            "Authorization denied or failed: {error}"
+        )));
     }
 
     // Extract code parameter
@@ -425,7 +432,10 @@ async fn exchange_code_for_token(
     let credentials =
         base64::engine::general_purpose::STANDARD.encode(format!("{client_id}:{client_secret}"));
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| CliError::OAuth(format!("Failed to build token exchange client: {e}")))?;
     let resp = http
         .post("https://api.notion.com/v1/oauth/token")
         .header("Authorization", format!("Basic {credentials}"))
@@ -495,4 +505,35 @@ async fn switch(profile: &str, config: &mut Config) -> Result<(), CliError> {
     config.save()?;
     eprintln!("Switched to profile \"{profile}\"");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_denial_with_matching_state_is_terminal() {
+        let result = extract_code_from_request(
+            "GET /callback?error=access_denied&state=expected HTTP/1.1\r\n\r\n",
+            "expected",
+        );
+
+        assert!(matches!(
+            result,
+            Err(CliError::OAuth(message)) if message.starts_with("Authorization denied")
+        ));
+    }
+
+    #[test]
+    fn oauth_denial_cannot_bypass_state_validation() {
+        let result = extract_code_from_request(
+            "GET /callback?error=access_denied&state=wrong HTTP/1.1\r\n\r\n",
+            "expected",
+        );
+
+        assert!(matches!(
+            result,
+            Err(CliError::OAuth(message)) if message.contains("State parameter mismatch")
+        ));
+    }
 }
