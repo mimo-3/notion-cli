@@ -96,7 +96,7 @@ impl NotionClient {
         parent_page_id: &str,
     ) -> Result<Value, CliError> {
         let file_size = file_data.len();
-        let number_of_parts = ((file_size + PART_SIZE - 1) / PART_SIZE).max(1) as u32;
+        let number_of_parts = file_size.div_ceil(PART_SIZE).max(1) as u32;
 
         eprintln!(
             "Creating upload session for '{}' ({} bytes, {} part(s))...",

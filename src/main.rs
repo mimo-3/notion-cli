@@ -36,9 +36,9 @@ async fn main() {
 /// Extract a Notion ID from a URL or normalize a raw ID.
 pub fn normalize_id(id_or_url: &str) -> String {
     if id_or_url.contains("notion.so") || id_or_url.contains("notion.site") {
-        if let Some(last) = id_or_url.split('/').last() {
+        if let Some(last) = id_or_url.split('/').next_back() {
             let cleaned = last.split('?').next().unwrap_or(last);
-            if let Some(id_part) = cleaned.split('-').last() {
+            if let Some(id_part) = cleaned.split('-').next_back() {
                 if id_part.len() == 32 && id_part.chars().all(|c| c.is_ascii_hexdigit()) {
                     return format!(
                         "{}-{}-{}-{}-{}",

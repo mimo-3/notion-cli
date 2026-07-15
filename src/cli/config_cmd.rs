@@ -50,7 +50,7 @@ pub async fn run(cmd: ConfigCommand, config: &mut Config) -> Result<(), CliError
             println!("defaults.page_size = {}", config.defaults.page_size);
             println!();
             println!("Profiles:");
-            for (name, _profile) in &config.profiles {
+            for name in config.profiles.keys() {
                 let marker = if name == &config.default_profile {
                     " (active)"
                 } else {
