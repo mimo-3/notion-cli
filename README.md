@@ -13,8 +13,8 @@ The official Notion CLI (`ntn`) focuses on pages and Workers, leaving most of th
 | Feature | ntn | notion-cli |
 |---------|-----|------------|
 | **Search** | No command (raw API only) | `notion search <query>` |
-| **Database CRUD** | No command | `notion db get/query/list/create` |
-| **Database query with filters** | Via data sources only | `notion db query --filter-json '...'` |
+| **Database CRUD** | No command | `notion db get/create` |
+| **Data source query with filters** | Via data sources only | `notion db query <data-source-id> --filter-json '...'` |
 | **Block operations** | No command | `notion block get/children/append/update/delete` |
 | **Recursive block tree** | Not available | `notion block children --recursive` |
 | **Comments** | No command | `notion comment list/get/create/update/delete` |
@@ -36,7 +36,6 @@ The official Notion CLI (`ntn`) focuses on pages and Workers, leaving most of th
 | Workers lifecycle | Notion-specific serverless platform; out of scope |
 | Workers TUI | Workers-specific |
 | Self-update | Package managers handle this |
-| OAuth browser flow | We use direct token auth (simpler for CLI use) |
 
 ## Installation
 
@@ -57,8 +56,8 @@ notion auth login
 # Search your workspace
 notion search "meeting notes"
 
-# Query a database
-notion db query <database-id> --all --json
+# Query a data source
+notion db query <data-source-id> --all --json
 
 # Get page content
 notion page content <page-id>
@@ -91,7 +90,7 @@ All commands support multiple output formats:
 ```bash
 notion search "project" --json          # Full JSON
 notion search "project" --format yaml   # YAML
-notion db query <id> --format csv       # CSV (great for spreadsheets)
+notion db query <data-source-id> --format csv # CSV (great for spreadsheets)
 notion search "project" --format id-only # Just IDs (for piping)
 ```
 
@@ -100,12 +99,13 @@ notion search "project" --format id-only # Just IDs (for piping)
 | Command | Description |
 |---------|-------------|
 | `notion auth` | Login, logout, whoami, switch profiles |
-| `notion search` | Search pages and databases |
+| `notion search` | Search pages and data sources |
 | `notion page` | Get, create, update, trash, restore, move pages |
-| `notion db` | Get, query, list, create databases |
+| `notion db` | Get/create databases and query/list data sources |
 | `notion block` | Get, list children, append, update, delete blocks |
 | `notion comment` | List, get, create, update, delete comments |
 | `notion user` | Get current user, list users |
+| `notion file` | Upload, retrieve, and list file uploads |
 | `notion api` | Raw API escape hatch |
 | `notion config` | Manage CLI settings |
 
