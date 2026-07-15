@@ -24,6 +24,9 @@ pub enum CliError {
     #[error("Config error: {0}")]
     Config(String),
 
+    #[error("OAuth error: {0}")]
+    OAuth(String),
+
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 
