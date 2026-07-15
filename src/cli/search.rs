@@ -12,8 +12,8 @@ pub struct SearchArgs {
     /// Search query text
     pub query: String,
 
-    /// Filter by object type: page or database
-    #[arg(long, value_name = "TYPE")]
+    /// Filter by object type: page or data_source
+    #[arg(long, value_name = "TYPE", value_parser = ["page", "data_source"])]
     pub filter: Option<String>,
 
     /// Sort direction: ascending or descending
