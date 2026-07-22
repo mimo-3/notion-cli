@@ -5,6 +5,11 @@ use super::NotionClient;
 impl NotionClient {
     /// Build the standard Notion API headers.
     pub(crate) fn notion_headers(&self) -> HeaderMap {
+        self.notion_headers_with_version(&self.api_version)
+    }
+
+    /// Build Notion API headers pinned to a specific API version.
+    pub(crate) fn notion_headers_with_version(&self, api_version: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(
             "Authorization",
@@ -13,8 +18,7 @@ impl NotionClient {
         );
         headers.insert(
             "Notion-Version",
-            HeaderValue::from_str(&self.api_version)
-                .expect("api version should be valid header value"),
+            HeaderValue::from_str(api_version).expect("api version should be valid header value"),
         );
         headers.insert("Content-Type", HeaderValue::from_static("application/json"));
         headers

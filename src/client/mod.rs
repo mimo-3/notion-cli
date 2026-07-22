@@ -29,6 +29,11 @@ impl NotionClient {
             .clone()
             .unwrap_or_else(|| DEFAULT_API_VERSION.to_string());
 
+        // Reject values that cannot become a header now, so header construction
+        // never has to handle user input.
+        reqwest::header::HeaderValue::from_str(&api_version)
+            .map_err(|_| CliError::Config(format!("Invalid API version: {api_version}")))?;
+
         let base_url = Url::parse(DEFAULT_BASE_URL).expect("default base URL should always parse");
 
         let http = reqwest::Client::builder()

@@ -73,6 +73,8 @@ All requests send `Notion-Version: 2026-03-11`. Override with `--api-version`.
 
 **Known version-specific behavior**: The `after` parameter for block children append (`PATCH /v1/blocks/{id}/children`) requires `--api-version 2022-06-28`. The default version (`2026-03-11`) rejects it with `body.after should be not present` (400 validation_error). This is Notion's official version pinning — older versions remain supported, but the parameter was removed from newer API contracts.
 
+`file upload --parent <id>` attaches the uploaded file to a page/block as a child block (block type derived from content type: image/video/audio/pdf/file). With `--after <block-id>` the attach request is automatically pinned to `2022-06-28` unless the user passes `--api-version` explicitly.
+
 ## Phase 1 Scope
 
 Auth, search, page (get/content/create), db (get/query with raw JSON filters), user me, config, all output formats, rate limiting, pagination. See ARCHITECTURE.md for full phasing.

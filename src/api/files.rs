@@ -10,6 +10,10 @@ const SINGLE_PART_LIMIT: usize = 20 * 1024 * 1024;
 const PART_SIZE: usize = 20 * 1024 * 1024;
 const MAX_PARTS: usize = 10_000;
 
+/// The `after` parameter for block children append only exists in this API version.
+/// Newer versions reject it with `body.after should be not present`.
+pub const AFTER_CAPABLE_API_VERSION: &str = "2022-06-28";
+
 fn upload_part_count(file_size: usize) -> Result<u32, CliError> {
     let parts = if file_size <= SINGLE_PART_LIMIT {
         1
@@ -104,6 +108,38 @@ impl NotionClient {
         .await
     }
 
+    /// Attach an uploaded file to a page or block as a new child block.
+    ///
+    /// `after` positions the new block right below an existing child block.
+    /// Because `after` is only accepted by API version 2022-06-28, callers may
+    /// pass `api_version` to pin that single request; `None` uses the client default.
+    pub async fn attach_file_upload(
+        &self,
+        parent_id: &str,
+        file_upload_id: &str,
+        block_type: &str,
+        after: Option<&str>,
+        api_version: Option<&str>,
+    ) -> Result<Value, CliError> {
+        let mut block = serde_json::Map::new();
+        block.insert("type".to_string(), json!(block_type));
+        block.insert(
+            block_type.to_string(),
+            json!({ "type": "file_upload", "file_upload": { "id": file_upload_id } }),
+        );
+
+        let mut body = json!({ "children": [Value::Object(block)] });
+        if let Some(after) = after {
+            body["after"] = json!(after);
+        }
+
+        let path = format!("/v1/blocks/{parent_id}/children");
+        match api_version {
+            Some(version) => self.patch_with_api_version(&path, &body, version).await,
+            None => self.patch(&path, &body).await,
+        }
+    }
+
     /// Get file upload metadata.
     pub async fn get_file_upload(&self, file_upload_id: &str) -> Result<Value, CliError> {
         self.get(&format!("/v1/file_uploads/{file_upload_id}"))
@@ -196,6 +232,21 @@ impl NotionClient {
 
         eprintln!("Upload complete. File ID: {}", file_upload_id);
         Ok(result)
+    }
+}
+
+/// Map an uploaded file's content type to the Notion block type that embeds it.
+pub fn block_type_for_content_type(content_type: &str) -> &'static str {
+    if content_type.starts_with("image/") {
+        "image"
+    } else if content_type.starts_with("video/") {
+        "video"
+    } else if content_type.starts_with("audio/") {
+        "audio"
+    } else if content_type == "application/pdf" {
+        "pdf"
+    } else {
+        "file"
     }
 }
 
@@ -419,6 +470,72 @@ mod tests {
             .unwrap();
         assert_eq!(listed.len(), 1);
         client.complete_file_upload("fu_1").await.unwrap();
+    }
+
+    #[test]
+    fn block_type_follows_content_type_family() {
+        assert_eq!(block_type_for_content_type("image/png"), "image");
+        assert_eq!(block_type_for_content_type("image/svg+xml"), "image");
+        assert_eq!(block_type_for_content_type("video/mp4"), "video");
+        assert_eq!(block_type_for_content_type("audio/mpeg"), "audio");
+        assert_eq!(block_type_for_content_type("application/pdf"), "pdf");
+        assert_eq!(block_type_for_content_type("text/csv"), "file");
+        assert_eq!(block_type_for_content_type("application/zip"), "file");
+    }
+
+    #[tokio::test]
+    async fn attach_appends_typed_block_with_default_version() {
+        let server = MockServer::start().await;
+        authenticated(
+            Mock::given(method("PATCH"))
+                .and(path("/v1/blocks/page_1/children"))
+                .and(body_json(json!({
+                    "children": [{
+                        "type": "image",
+                        "image": { "type": "file_upload", "file_upload": { "id": "fu_1" } }
+                    }]
+                }))),
+        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"object": "list"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+        client_for(&server)
+            .attach_file_upload("page_1", "fu_1", "image", None, None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn attach_with_after_pins_requested_api_version() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path("/v1/blocks/page_1/children"))
+            .and(header("authorization", format!("Bearer {TOKEN}")))
+            .and(header("notion-version", AFTER_CAPABLE_API_VERSION))
+            .and(body_json(json!({
+                "children": [{
+                    "type": "pdf",
+                    "pdf": { "type": "file_upload", "file_upload": { "id": "fu_2" } }
+                }],
+                "after": "block_9"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"object": "list"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client_for(&server)
+            .attach_file_upload(
+                "page_1",
+                "fu_2",
+                "pdf",
+                Some("block_9"),
+                Some(AFTER_CAPABLE_API_VERSION),
+            )
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
