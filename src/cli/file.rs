@@ -22,7 +22,8 @@ pub enum FileSubcommand {
     Upload {
         /// Path to the file
         path: String,
-        /// Page or block ID to attach the uploaded file to as a child block
+        /// Page or block ID to attach the uploaded file to as a child block.
+        /// Prints the attach response; the file upload ID goes to stderr
         #[arg(long)]
         parent: Option<String>,
         /// Existing child block ID to insert the new block after (requires --parent)
@@ -43,6 +44,30 @@ pub enum FileSubcommand {
         #[arg(long)]
         limit: Option<u32>,
     },
+}
+
+/// Decide which Notion API version the attach request should pin, and whether
+/// to warn the user.
+///
+/// The `after` parameter only exists in the 2022-06-28 API contract. Without an
+/// explicit `--api-version` we pin that version automatically; an explicit
+/// choice is respected, but anything other than 2022-06-28 combined with
+/// `--after` is likely to be rejected by the API, so it earns a warning.
+fn resolve_attach_api_version(
+    after: Option<&str>,
+    explicit_api_version: Option<&str>,
+) -> (Option<&'static str>, Option<String>) {
+    match (after, explicit_api_version) {
+        (Some(_), None) => (Some(AFTER_CAPABLE_API_VERSION), None),
+        (Some(_), Some(version)) if version != AFTER_CAPABLE_API_VERSION => (
+            None,
+            Some(format!(
+                "--after is only accepted by API version {AFTER_CAPABLE_API_VERSION}; \
+                 the request may be rejected by {version}"
+            )),
+        ),
+        _ => (None, None),
+    }
 }
 
 pub async fn run(
@@ -84,31 +109,33 @@ pub async fn run(
 
             let parent_id = crate::normalize_id(&parent);
 
-            if global.dry_run {
-                eprintln!("[dry-run] PATCH /v1/blocks/{parent_id}/children");
-                return output::format_value(&result, format, &mut stdout);
-            }
-
-            let file_upload_id = result
-                .get("id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| CliError::Config("Missing file upload id in response".to_string()))?
-                .to_string();
+            // In dry-run mode the upload never happens, so there is no real id;
+            // use a placeholder so the attach request can still be previewed.
+            let file_upload_id = if global.dry_run {
+                "<file-upload-id>".to_string()
+            } else {
+                result
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        CliError::Config("Missing file upload id in response".to_string())
+                    })?
+                    .to_string()
+            };
 
             let block_type = block_type_for_content_type(content_type);
             let after_id = after.map(|a| crate::normalize_id(&a));
 
-            // `after` only exists in the 2022-06-28 API contract; pin it for this
-            // request unless the user chose a version explicitly.
-            let pinned_version = match (&after_id, &global.api_version) {
-                (Some(_), None) => {
-                    eprintln!(
-                        "Using Notion-Version {AFTER_CAPABLE_API_VERSION} for positioned attach (--after)"
-                    );
-                    Some(AFTER_CAPABLE_API_VERSION)
-                }
-                _ => None,
-            };
+            let (pinned_version, warning) =
+                resolve_attach_api_version(after_id.as_deref(), global.api_version.as_deref());
+            if let Some(warning) = warning {
+                eprintln!("warning: {warning}");
+            }
+            if pinned_version.is_some() {
+                eprintln!(
+                    "Using Notion-Version {AFTER_CAPABLE_API_VERSION} for positioned attach (--after)"
+                );
+            }
 
             eprintln!("Attaching to {parent_id} as {block_type} block...");
             let attached = client
@@ -137,5 +164,40 @@ pub async fn run(
             let results = client.list_file_uploads(&opts).await?;
             output::format_value(&Value::Array(results), format, &mut stdout)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_version_pins_only_when_after_is_set_without_explicit_version() {
+        assert_eq!(
+            resolve_attach_api_version(Some("block_1"), None),
+            (Some(AFTER_CAPABLE_API_VERSION), None)
+        );
+        assert_eq!(resolve_attach_api_version(None, None), (None, None));
+        assert_eq!(
+            resolve_attach_api_version(None, Some("2026-03-11")),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn attach_version_respects_explicit_after_capable_version_silently() {
+        assert_eq!(
+            resolve_attach_api_version(Some("block_1"), Some(AFTER_CAPABLE_API_VERSION)),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn attach_version_warns_when_explicit_version_cannot_take_after() {
+        let (pinned, warning) = resolve_attach_api_version(Some("block_1"), Some("2026-03-11"));
+        assert_eq!(pinned, None);
+        let warning = warning.expect("a warning should be produced");
+        assert!(warning.contains(AFTER_CAPABLE_API_VERSION));
+        assert!(warning.contains("2026-03-11"));
     }
 }
