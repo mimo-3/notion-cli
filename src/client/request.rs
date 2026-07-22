@@ -70,6 +70,29 @@ impl NotionClient {
         .await
     }
 
+    /// Send a PATCH request with a JSON body, pinning a specific Notion API version
+    /// for this request only (used for parameters that older versions still accept).
+    pub async fn patch_with_api_version(
+        &self,
+        path: &str,
+        body: &Value,
+        api_version: &str,
+    ) -> Result<Value, CliError> {
+        let url = self.api_url(path)?;
+
+        if self.dry_run {
+            return self.dry_run_log("PATCH", &url, Some(body));
+        }
+
+        self.request_with_retry(|| {
+            self.http
+                .patch(url.clone())
+                .headers(self.notion_headers_with_version(api_version))
+                .json(body)
+        })
+        .await
+    }
+
     /// Send a PUT request with a JSON body.
     #[allow(dead_code)]
     pub async fn put(&self, path: &str, body: &Value) -> Result<Value, CliError> {
