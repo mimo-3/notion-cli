@@ -41,7 +41,7 @@ The official Notion CLI (`ntn`) focuses on pages and Workers, leaving most of th
 
 ```bash
 # From source
-cargo install --path .
+cargo install --locked --path .
 
 # Or build directly
 cargo build --release
