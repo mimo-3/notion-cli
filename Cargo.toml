@@ -45,4 +45,4 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 urlencoding = "2"
 
 [dev-dependencies]
-wiremock = "=0.6.4"
+wiremock = "=0.6.5"
