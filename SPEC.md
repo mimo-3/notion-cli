@@ -444,11 +444,15 @@ human-friendly expressions to Notion filter JSON once property-type resolution i
 
 All commands support:
 - `--json` -- full API response JSON
-- `--plain` -- human-readable text (default for TTY)
+- `--format plain` -- human-readable text (default for TTY except `api`)
 - `--yaml` -- YAML output
 - `--csv` -- CSV (for `db query`, `user list`, etc.)
 - `--tsv` -- TSV variant
 - `--id-only` -- just print IDs (for piping)
+
+Without an explicit format, non-terminal stdout defaults to JSON, as does `api`
+even on a terminal. Explicit `--format` overrides these defaults; `--json`
+takes precedence over `--format`.
 
 ### Global Flags
 

@@ -261,7 +261,7 @@ pub struct GlobalOpts {
     pub workspace: Option<String>,
     #[arg(long)]
     pub api_version: Option<String>,
-    #[arg(long, default_value = "plain")]
+    #[arg(long)]
     pub format: Option<OutputFormat>,
     #[arg(long)]
     pub json: bool,           // Shorthand for --format json

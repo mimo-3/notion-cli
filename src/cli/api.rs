@@ -48,7 +48,7 @@ pub async fn run(
         }
     };
 
-    let format = global.output_format();
+    let format = global.api_output_format();
     let mut stdout = std::io::stdout();
     output::format_value(&result, format, &mut stdout)
 }
