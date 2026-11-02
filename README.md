@@ -87,6 +87,11 @@ export NOTION_API_TOKEN=ntn_...
 
 All commands support multiple output formats:
 
+Without an explicit format, output is plain text on a terminal and JSON when
+stdout is piped or redirected. `notion api` defaults to JSON in both cases.
+Use `--format plain` (or another format) to override the default; `--json`
+takes precedence if both options are supplied.
+
 ```bash
 notion search "project" --json          # Full JSON
 notion search "project" --format yaml   # YAML
