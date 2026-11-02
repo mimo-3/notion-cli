@@ -11,6 +11,7 @@ pub mod user;
 pub mod view;
 
 use clap::{Args, Parser, Subcommand};
+use std::io::IsTerminal;
 
 use crate::output::OutputFormat;
 
@@ -43,8 +44,8 @@ pub struct GlobalOpts {
     pub api_version: Option<String>,
 
     /// Output format
-    #[arg(long, global = true, default_value = "plain")]
-    pub format: OutputFormat,
+    #[arg(long, global = true)]
+    pub format: Option<OutputFormat>,
 
     /// Shorthand for --format json
     #[arg(long, global = true)]
@@ -64,12 +65,25 @@ pub struct GlobalOpts {
 }
 
 impl GlobalOpts {
-    /// Resolve the effective output format, considering --json shorthand.
+    /// Resolve the effective output format for standard commands.
     pub fn output_format(&self) -> OutputFormat {
+        self.resolve_output_format(std::io::stdout().is_terminal(), false)
+    }
+
+    /// Resolve the effective output format for raw API calls.
+    pub fn api_output_format(&self) -> OutputFormat {
+        self.resolve_output_format(std::io::stdout().is_terminal(), true)
+    }
+
+    fn resolve_output_format(&self, is_terminal: bool, is_api: bool) -> OutputFormat {
         if self.json {
             OutputFormat::Json
+        } else if let Some(format) = self.format {
+            format
+        } else if is_api || !is_terminal {
+            OutputFormat::Json
         } else {
-            self.format
+            OutputFormat::Plain
         }
     }
 }
@@ -105,6 +119,46 @@ mod tests {
     use clap::{error::ErrorKind, Parser};
 
     use super::*;
+
+    #[test]
+    fn output_format_defaults_and_explicit_options() {
+        let parse = |args: &[&str]| Cli::try_parse_from(args).expect("valid arguments").global;
+        let default = parse(&["notion", "search", "test"]);
+        assert_eq!(default.format, None);
+        assert_eq!(
+            default.resolve_output_format(true, false),
+            OutputFormat::Plain
+        );
+        assert_eq!(
+            default.resolve_output_format(false, false),
+            OutputFormat::Json
+        );
+        assert_eq!(
+            default.resolve_output_format(true, true),
+            OutputFormat::Json
+        );
+        assert_eq!(
+            default.resolve_output_format(false, true),
+            OutputFormat::Json
+        );
+
+        for is_terminal in [true, false] {
+            for is_api in [true, false] {
+                let plain = parse(&["notion", "api", "/v1/pages", "--format", "plain"]);
+                assert_eq!(
+                    plain.resolve_output_format(is_terminal, is_api),
+                    OutputFormat::Plain
+                );
+                let json = parse(&["notion", "search", "test", "--json"]);
+                assert_eq!(
+                    json.resolve_output_format(is_terminal, is_api),
+                    OutputFormat::Json
+                );
+            }
+        }
+        let both = parse(&["notion", "search", "test", "--format", "plain", "--json"]);
+        assert_eq!(both.resolve_output_format(true, false), OutputFormat::Json);
+    }
 
     #[test]
     fn db_query_rejects_unimplemented_filter_dsl() {
